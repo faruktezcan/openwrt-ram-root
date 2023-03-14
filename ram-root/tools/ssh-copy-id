@@ -1,0 +1,21 @@
+#!/bin/sh
+
+get_key() { #$1= key_type
+  [[ -f /root/.ssh/id_${1}.pub ]] && echo $(cat /root/.ssh/id_${1}.pub) || echo $(dropbearkey -y -f /root/.ssh/id_${1} | grep "ssh-")
+}
+
+DEST=${1} # destination name/ip
+[[ $# -eq 0 || $# -gt 2 ]] && { echo "Info: need an option to run"; exit 1; }
+
+mkdir -p /root/.ssh
+
+[[ -z $2 ]] && { key_type="rsa"; [[ -f /root/.ssh/id_ed25519 ]] && key_type="ed25519"; } || key_type=$2
+[[ -f /root/.ssh/id_$key_type ]] || { "Error: Key file /root/.ssh/id_$key_type not found"; exit 1; }
+
+key=$(get_key $key_type)
+name=$(echo $key | awk '{print $3}')
+file="/etc/dropbear/authorized_keys"
+cmd="touch $file; sed -i '/${name}/d' $file; echo $key >> $file"
+ssh $DEST "${cmd}" && echo "Copying key $key_type successful !" || echo "Error: Copying key $key_type not completed for '$OPT' ! Return code: $?"
+
+exit 0

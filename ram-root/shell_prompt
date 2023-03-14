@@ -1,0 +1,25 @@
+#! /bin/sh
+
+export PATH="$PATH:/ram-root"
+
+calc() { awk "BEGIN{print $*}"; }; export calc
+
+alias u='cd ..'
+alias ll='ls -lAh --color=yes'
+alias lr='ls -lRh --color=yes'
+
+eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
+
+case $VERSION in
+  1* ) ;;
+  *  )
+    alias ssh='ssh -i /etc/dropbear/dropbear_ed25519_host_key -i /etc/dropbear/dropbear_rsa_host_key'
+    alias scp='scp -pi /etc/dropbear/dropbear_ed25519_host_key -i /etc/dropbear/dropbear_rsa_host_key'
+  ;;
+esac
+
+[ -e /tmp/ram-root-active ] \
+  && export PS1="\[\033[35m\]\t\[\033[m\]-\[\033[31;5m\]\PIVOT\[\033[m\]@\[\033[32m\]\h:\[\033[36;1m\]\w\[\033[m\]\$ " \
+  || export PS1="\[\033[35m\]\t\[\033[m\]-\[\033[32m\]\h:\[\033[36;1m\]\w\[\033[m\]\$ "
+
+cd /etc/config

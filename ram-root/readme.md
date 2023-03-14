@@ -18,6 +18,7 @@ and test new packages beyond your flash drive’s capacity to see how they work.
 
 
 Installation:
+
 +++++++++++++
 
 -Download the provided ‘ram-root.tar.gz’ file and extract it with this command: 'tar -C / -vzxf ram-root.tar.gz'
@@ -32,6 +33,7 @@ Installation:
 
 
 How to use:
+
 +++++++++++
 
 - 'sh /ram-root/ram-root.sh init'
@@ -62,6 +64,7 @@ Run 'opkg upgrade' command to upgrade the system.
 
 
 Notes:
+
 ++++++
 
 You can enable the autorun option by entering '/etc/init.d/ram-root enable' to boot your router through the 'ram-root',

@@ -1,5 +1,7 @@
 Introduction:
+
 +++++++++++++
+
 
 - If you have a router without a USB port, it is very likely that with more intense usage of your router, you will need more disk space
 and/or
@@ -68,7 +70,9 @@ if you make sure that everything works quite nicely.
 The previous state of the router is mounted under '/old-root'. You can simply switch to that and make changes to your base system.
 
 
+
 Included scripts in 'tools' directory:
+
 ++++++++++++++++++++++++++++++++++++++
 
 'opkgclean.sh'   : Cleans unsuccesful installation attempt debris due to flash storage shortage
@@ -77,6 +81,6 @@ Included scripts in 'tools' directory:
 
 'opkgupgrade.sh' : Upgrades whole system packages interactively
 
-'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later.
+'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later
 
-'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections.
+'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections

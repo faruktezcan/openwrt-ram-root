@@ -32,7 +32,7 @@ Installation:
 How to use:
 +++++++++++
 
-- '/etc/ram-root/ram-root.sh init'
+- 'sh /ram-root/ram-root.sh init'
 This has to be run for the first time from your console to start the ram-root installation on your router and the server.
 The script will copy itself into '/etc/init.d' for further operations.
 

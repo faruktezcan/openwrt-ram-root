@@ -30,7 +30,7 @@ Installation:
 +++++++++++++
 
 
--Download the provided ‘ram-root.tar.gz’ file and extract it with this command: 'tar -C / -vzxf ram-root.tar.gz'
+-Download the provided ‘zip’ file and extract 'ram-root' directory to '/' of your device.
 
 -After the extraction you should have a new directory named ‘/ram-root’.
 

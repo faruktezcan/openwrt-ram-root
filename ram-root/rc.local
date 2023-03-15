@@ -1,7 +1,1 @@
-#!/bin/sh
 
-wifi down
-/etc/init.d/wpad restart
-wifi up
-
-exit 0

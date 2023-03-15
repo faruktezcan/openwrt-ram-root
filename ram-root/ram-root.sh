@@ -218,7 +218,7 @@ pre_proc() {
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   mkdir -p ${NEW_ROOT} ${PKGS_DIR} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
-  [[ "${PACKAGES}" != "" ]] && __pre_install_packages
+  [[ ! -n ${PACKAGES} ]] && __pre_install_packages
   
   if [[ "$BACKUP" == "Y" ]]; then
     local name="${SHARE}/${BACKUP_FILE}.gz"
@@ -413,7 +413,11 @@ fi
 
 pre_proc
 
-do_exec mount -t overlay -o noatime,lowerdir=${PKGS_DIR}:/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
+if [[ -n ${PACKAGES} ]]; then
+  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
+else
+  do_exec mount -t overlay -o noatime,lowerdir=${PKGS_DIR}:/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
+fi
 mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc

@@ -46,12 +46,15 @@ do_countdown() { # <seconds> $1-seconds(default=60)
   echo
 }
 
-do_install() { # installs a package $1-list of packages
+do_install() { # installs a package $1-list of packages $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
+  local conf_file=${2:-"/etc/opkg.conf"}
+  local dest_name=${3:-"root"}
+  
   for name in ${1}
   do
-    [[ -n "$(opkg status $name)" ]] && continue
+    [[ -n "$(opkg status $name)" ]] && { do_logger "Notice: '$name' already installed"; continue; }
     [[ -z "$(opkg find $name)" ]] && do_error "Error: '$name' not found"
-    do_exec opkg install $name
+    do_exec opkg install -f ${conf_file} -d ${dest_name} $name
   done
 }
 
@@ -73,10 +76,11 @@ do_pidmsg() {
 do_backup() { # creates ram-root backup
   local dir="/overlay/upper/"
   local backup_size=$(du -cs $dir | grep total | awk '{print $1*1024}')
-
+  local server_free_space
+  
   [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
-    && local server_free_space=$(df -kP | awk '$6 == "/" {print $4*1024}') \
-    || local server_free_space=$(${SSH_CMD} "df -kP" | awk '$6 == "/" {print $4*1024}')
+    && server_free_space=$(df -kP | awk '$6 == "/" {print $4*1024}') \
+    || server_free_space=$(${SSH_CMD} "df -kP" | awk '$6 == "/" {print $4*1024}')
 
   if [[ $server_free_space -gt $backup_size ]]; then
     local nc="nice -n 19"
@@ -181,6 +185,19 @@ __wait_for_network() {
   ubus -t ${NETWORK_WAIT_TIME} wait_for network 2>/dev/null
 }
 
+__pre_install_packages() {
+  do_exec cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
+  echo "dest ram-root ${PKGS_DIR}" >> /tmp/opkg_ram-root.conf
+
+  type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
+  opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Updating repository failed"
+
+  for name in ${PACKAGES}
+  do
+    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
+  done
+}
+
 ###################################
 #       PRE INSTALL PROCEDURE     #
 ###################################
@@ -199,13 +216,23 @@ pre_proc() {
   mkdir -p $NEW_OVERLAY
   do_logger "Creating: ram disk"
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
-  mkdir -p $NEW_ROOT ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
+  mkdir -p ${NEW_ROOT} ${PKGS_DIR} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
+  [[ "${PACKAGES}" != "" ]] && __pre_install_packages
+  
   if [[ "$BACKUP" == "Y" ]]; then
     local name="${SHARE}/${BACKUP_FILE}.gz"
+    local backupExist="false"
+
     case $OPT in
       start)
-        if (${SSH_CMD} "[ -f ${name} ] && return 0 || return 1"); then
+        if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+          [[ -f ${name} ]] && backupExist="true"
+        else 
+          if ( ${SSH_CMD} "[ -f ${name} ] && return 0 || return 1" ); then backupExist="true"; fi
+        fi
+
+        if [[ "${backupExist}" == "true" ]]; then
           do_logger "Restoring: ram-root backup '${name}'"
           [[ "$VERBOSE" == "Y" ]] && start_progress
           [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
@@ -331,12 +358,14 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
 fi
 
 SYSTEM_IP=$(uci get network.lan.ipaddr)
+
 #[[ $(__occurs "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) ) -gt 0 ]] && SERVER=$SYSTEM_IP
 __list_contains "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) && SERVER=$SYSTEM_IP
 SHARE="${SHARE}/${HOSTNAME}"
 SERVER_SHARE="${SERVER}:${SHARE}"
 NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
+PKGS_DIR="${NEW_OVERLAY}/lower"
 BACKUP_FILE="${BUILD_ID}.tar"
 SSH_CMD="ssh $(__identity_file) ${USER}@${SERVER}/${PORT}"
 
@@ -384,7 +413,7 @@ fi
 
 pre_proc
 
-do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
+do_exec mount -t overlay -o noatime,lowerdir=${PKGS_DIR}:/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
 mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc

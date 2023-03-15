@@ -1,7 +1,5 @@
 Introduction:
-
 +++++++++++++
-
 
 - If you have a router without a USB port, it is very likely that with more intense usage of your router, you will need more disk space
 and/or
@@ -18,7 +16,6 @@ and test new packages beyond your flash drive’s capacity to see how they work.
 
 
 Installation:
-
 +++++++++++++
 
 -Download the provided ‘ram-root.tar.gz’ file and extract it with this command: 'tar -C / -vzxf ram-root.tar.gz'
@@ -33,7 +30,6 @@ Installation:
 
 
 How to use:
-
 +++++++++++
 
 - 'sh /ram-root/ram-root.sh init'
@@ -64,7 +60,6 @@ Run 'opkg upgrade' command to upgrade the system.
 
 
 Notes:
-
 ++++++
 
 You can enable the autorun option by entering '/etc/init.d/ram-root enable' to boot your router through the 'ram-root',
@@ -73,9 +68,7 @@ if you make sure that everything works quite nicely.
 The previous state of the router is mounted under '/old-root'. You can simply switch to that and make changes to your base system.
 
 
-
 Included scripts in 'tools' directory:
-
 ++++++++++++++++++++++++++++++++++++++
 
 'opkgclean.sh'   : Cleans unsuccesful installation attempt debris due to flash storage shortage
@@ -84,6 +77,6 @@ Included scripts in 'tools' directory:
 
 'opkgupgrade.sh' : Upgrades whole system packages interactively
 
-'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later
+'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later.
 
-'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections
+'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections.

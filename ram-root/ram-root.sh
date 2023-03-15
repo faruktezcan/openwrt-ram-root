@@ -413,7 +413,7 @@ fi
 
 pre_proc
 
-if [[ -n ${PACKAGES} ]]; then
+if [[ -z "${PACKAGES}" ]]; then
   do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT
 else
   do_exec mount -t overlay -o noatime,lowerdir=${PKGS_DIR}:/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root $NEW_ROOT

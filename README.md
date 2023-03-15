@@ -1,5 +1,5 @@
 # openwrt-ram-root
-Extroot using ramfs with  backup&restore option
+Extroot using memory (tmpfs) with  backup&restore option
 
 
 

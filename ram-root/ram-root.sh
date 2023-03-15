@@ -47,15 +47,13 @@ do_countdown() { # <seconds> $1-seconds(default=60)
 }
 
 do_install() { # installs a package $1-list of packages $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
+  local name=${1}
   local conf_file=${2:-"/etc/opkg.conf"}
   local dest_name=${3:-"root"}
   
-  for name in ${1}
-  do
-    [[ -n "$(opkg status $name)" ]] && { do_logger "Notice: '$name' already installed"; continue; }
-    [[ -z "$(opkg find $name)" ]] && do_error "Error: '$name' not found"
-    do_exec opkg install -f ${conf_file} -d ${dest_name} $name
-  done
+  [[ -n "$(opkg status $name)" ]] && { do_logger "Notice: '$name' already installed"; continue; }
+  [[ -z "$(opkg find $name)" ]] && do_error "Error: '$name' not found"
+  do_exec opkg install -f ${conf_file} -d ${dest_name} $name
 }
 
 do_rm() { # removes dir or file(s)
@@ -125,7 +123,7 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
   fi
 }
 
-do_initsetup() { # installs required server software
+do_initsetup() { # server setup
   case $VERSION in
     1* ) local key_type="rsa";;
     *  ) local key_type="ed25519"
@@ -189,9 +187,6 @@ __pre_install_packages() {
   do_exec cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
   echo "dest ram-root ${PKGS_DIR}" >> /tmp/opkg_ram-root.conf
 
-  type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
-  opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Updating repository failed"
-
   for name in ${PACKAGES}
   do
     do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
@@ -218,7 +213,11 @@ pre_proc() {
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   mkdir -p ${NEW_ROOT} ${PKGS_DIR} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
-  [[ ! -n ${PACKAGES} ]] && __pre_install_packages
+  [[ -n "${PACKAGES}" ]] && {
+    type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
+    opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Updating repository failed"
+    __pre_install_packages
+  }
   
   if [[ "$BACKUP" == "Y" ]]; then
     local name="${SHARE}/${BACKUP_FILE}.gz"

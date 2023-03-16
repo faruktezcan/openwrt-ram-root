@@ -1,6 +1,6 @@
 #! /bin/sh
 
-export PATH="$PATH:/ram-root"
+export PATH="$PATH:/ram-root:/ram-root/tools"
 
 calc() { awk "BEGIN{print $*}"; }; export calc
 
@@ -19,7 +19,8 @@ case $VERSION in
 esac
 
 [ -e /tmp/ram-root-active ] \
-  && export PS1="\[\033[35m\]\t\[\033[m\]-\[\033[31;5m\]\PIVOT\[\033[m\]@\[\033[32m\]\h:\[\033[36;1m\]\w\[\033[m\]\$ " \
+  && export PS1="\[\033[35m\]\t\[\033[m\]-\[\033[31;5m\]\|ram-root|\[\033[m\]@\[\033[32m\]\h:\[\033[36;1m\]\w\[\033[m\]\$ " \
   || export PS1="\[\033[35m\]\t\[\033[m\]-\[\033[32m\]\h:\[\033[36;1m\]\w\[\033[m\]\$ "
 
 cd /etc/config
+

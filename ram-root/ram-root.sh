@@ -1,13 +1,13 @@
-# Performs ext-root from ram drive as PIVOT
-# By Faruk Tezcan
-
 #!/bin/sh
 #set -xv # debug
 
-do_exec() { # <command>
+# Performs ext-root from ram drive as PIVOT root
+# By Faruk Tezcan  "tezcan.faruk@gmail.com"
+
+do_exec() { # <command> executes a command
   local cmd="${@}"
-  do_logger "Processing: ${cmd}"
-  eval ${cmd} || do_error "Failed. Return code: $?"
+  do_logger "Info: processing command < ${cmd} >"
+  eval ${cmd} || do_error "Error: command failed. Return code: $?"
 }
 
 do_logger() { # log msg
@@ -24,9 +24,8 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   [ -f $name ] && rm $name # remove autostart
 
   do_logger "$1"
-  do_logger "Stoppping: 'ram-root' process"
-#  [[ $(__occurs "init backup" $OPT) -gt 0 ]] && exit 1
-  __list_contains "init backup" $OPT && exit 1
+  do_logger "Error: stopping 'ram-root' process"
+  [[ $(__occurs "init backup" $OPT) -gt 0 ]] && exit 1
   sync
   [ "$VERBOSE" == "Y" ] && { echo -e "\a\nRebooting in $secs seconds\nPress 'Ctrl+C' to cancel"; do_countdown $secs; echo -ne "\a"; }
   reboot &
@@ -38,7 +37,7 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
 do_countdown() { # <seconds> $1-seconds(default=60)
   local secs=${1:-60}
   while [ ${secs} -gt 0 ]
-  do 
+  do
     printf "\r%2d" $secs
     let secs--
     sleep 1
@@ -46,26 +45,15 @@ do_countdown() { # <seconds> $1-seconds(default=60)
   echo
 }
 
-do_install() { # installs a package $1-list of packages $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
-  local name=${1}
-  local conf_file=${2:-"/etc/opkg.conf"}
-  local dest_name=${3:-"root"}
-  
-  [[ -n "$(opkg status $name)" ]] && { do_logger "Notice: '$name' already installed"; continue; }
-  [[ -z "$(opkg find $name)" ]] && do_error "Error: '$name' not found"
-  do_exec opkg install -f ${conf_file} -d ${dest_name} $name
-}
-
 do_rm() { # removes dir or file(s)
   do_exec rm -Rf ${@}
 }
 
 do_mklink() { # makes symlink $1-file/dir $2-destination
-  [[ -L $2 ]] || do_exec ln -sf $1 $2
+  [[ -L ${2} ]] || do_exec ln -sf ${1} ${2}
 }
 
-do_pidmsg() {
-#  do_logger "pid=$1"
+do_pidmsg() { # waits until given pid job is completed $1-pid #
   while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
   [[ "$VERBOSE" == "Y" ]] && echo -ne "\a"
   do_logger "Info: backup finished"
@@ -75,16 +63,19 @@ do_backup() { # creates ram-root backup
   local dir="/overlay/upper/"
   local backup_size=$(du -cs $dir | grep total | awk '{print $1*1024}')
   local server_free_space
-  
+
+  do_logger "Info: backup file size = ${backup_size} bytes"
+
   [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
-    && server_free_space=$(df -kP | awk '$6 == "/" {print $4*1024}') \
-    || server_free_space=$(${SSH_CMD} "df -kP" | awk '$6 == "/" {print $4*1024}')
+    && { SHARE=${BACKUP_SHARE}; server_free_space=$(df -kP ${OLD_ROOT} | awk '$1 != "Filesystem" {print $4*1024}'); } \
+    || server_free_space=$(${SSH_CMD} "df -kP ${SHARE}" | awk '$1 != "Filesystem" {print $4*1024}')
+
+  do_logger "Info: server ${SERVER} free space = ${server_free_space} bytes"
 
   if [[ $server_free_space -gt $backup_size ]]; then
     local nc="nice -n 19"
     local name="${SHARE}/${BACKUP_FILE}.gz"
-    local cmd="mkdir -p ${SHARE}
-    [[ -f ${name} ]] && mv -f ${name} ${name}.~"
+    local cmd="mkdir -p ${SHARE}; [[ -f ${name} ]] && mv -f ${name} ${name}.~"
     if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
       eval ${cmd}
       ${nc} tar -C $dir $EXCL $INCL -c -z -f ${name} . & >/dev/null
@@ -92,10 +83,9 @@ do_backup() { # creates ram-root backup
       ${nc} tar -C $dir $EXCL $INCL -c -f - . | ${nc} ${SSH_CMD} "${cmd}; ${nc} gzip > ${name}" & >/dev/null
     fi
     do_pidmsg $! &
-    do_logger "Info: backup running in background & will be created in '$SERVER_SHARE'"
+    do_logger "Info: backup is running in background & will be created shortly"
     [[ "$VERBOSE" == "Y" ]] && echo -ne "\a"
   else
-    do_logger "Info: ${SERVER} free space = ${server_free_space} bytes, backup file size = ${backup_size} bytes"
     do_error "Error: backup file size is too big"
   fi
 }
@@ -108,7 +98,7 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
     local msg=$secs
     while [[ $secs -gt 0 ]]
     do
-      [[ $msg -eq $secs ]] && do_logger "Checking: connection on server '$SERVER' port '$PORT'"
+      [[ $msg -eq $secs ]] && do_logger "Info: checking connection on server '$SERVER' port '$PORT'"
       netcat -w 1 -z $SERVER $PORT >/dev/null && return 0
       [ "$VERBOSE" == "Y" ] && printf "\a\r%2d" $secs
       let secs--
@@ -119,11 +109,11 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
     do_logger "$msg"
     return 1
   else
-    do_error "'netcat' not found"
+    do_error "'netcat' package must be installed"
   fi
 }
 
-do_initsetup() { # server setup
+do_init() { # server setup
   case $VERSION in
     1* ) local key_type="rsa";;
     *  ) local key_type="ed25519"
@@ -135,7 +125,7 @@ do_initsetup() { # server setup
 
   local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
 
-  do_logger "Setting up: 'local system'"
+  do_logger "Info: setting up 'local system'"
   mkdir -p /root/.ssh
   [[ -f $key_file ]] || do_exec dropbearkey -t $key_type -f $key_file
   do_mklink $key_file /root/.ssh/id_${key_type}
@@ -151,9 +141,36 @@ do_initsetup() { # server setup
   if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
     eval ${cmd}
   else
-    do_logger "Setting up: 'server $SERVER'"
+    do_logger "Info: setting up server '$SERVER'"
     ${SSH_CMD} "${cmd}" || do_error "$msg $?"
   fi
+}
+
+do_pre_install_packages() { # installs non-backable, non-preserved packages after reboots
+  do_logger "Info: installing package(s)- ${PACKAGES}"
+  cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
+  echo "dest ram-root ${PKGS_DIR}" >> /tmp/opkg_ram-root.conf
+  do_update_repositories
+  for name in ${PACKAGES}
+  do
+    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
+  done
+  rm -f /tmp/opkg_ram-root.conf
+}
+
+do_update_repositories() {
+  type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
+  opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Error: updating repository failed"
+}
+
+do_install() { # installs a package $1-list of packages $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
+  local name=${1}
+  local conf_file=${2:-"/etc/opkg.conf"}
+  local dest_name=${3:-"root"}
+
+  [[ -n "$(opkg status $name)" ]] && { do_logger "Notice: '$name' already installed"; return; }
+  [[ -z "$(opkg find $name)" ]] && do_error "Error: '$name' not found"
+  do_exec opkg install -f ${conf_file} -d ${dest_name} $name
 }
 
 __list_contains() { # returns 1 if $1 contains $2
@@ -166,32 +183,23 @@ __list_contains() { # returns 1 if $1 contains $2
 }
 
 __occurs() { # check if $1 (separated with $3) contains $2 & return the # of occurances
-  echo "$1" | tr {{"${3:-" "}"}} {{'\n'}} | grep -F -c -x ${2}
+  echo "${1}" | tr {{"${3:-" "}"}} {{'\n'}} | grep -F -c -x ${2}
 }
 
 __lowercase() { # converts $1 to lowercase & sets $2 as a variable with result if $2 defined
-  local __resultvar=$2
+  local __resultvar=${2}
   local __result=$(echo ${1} | awk '{print tolower($0)}')
   [[ "$__resultvar" ]] && eval $__resultvar="'$__result'" || echo -n "$__result"
 }
 
-__identity_file() {
+__identity_file() { # lists identity file(s)
   ls -1 /etc/dropbear/dropbear_* | while read name; do echo -n "-i ${name} "; done
 }
 
-__wait_for_network() {
+__wait_for_network() { # waits until local network is ready up to NETWORK_WAIT_TIME
   ubus -t ${NETWORK_WAIT_TIME} wait_for network 2>/dev/null
 }
 
-__pre_install_packages() {
-  do_exec cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
-  echo "dest ram-root ${PKGS_DIR}" >> /tmp/opkg_ram-root.conf
-
-  for name in ${PACKAGES}
-  do
-    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
-  done
-}
 
 ###################################
 #       PRE INSTALL PROCEDURE     #
@@ -209,30 +217,30 @@ pre_proc() {
   }
 
   mkdir -p $NEW_OVERLAY
-  do_logger "Creating: ram disk"
+  do_logger "Info: creating ram disk"
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   mkdir -p ${NEW_ROOT} ${PKGS_DIR} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
-  [[ -n "${PACKAGES}" ]] && {
-    type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
-    opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Updating repository failed"
-    __pre_install_packages
-  }
-  
+  [[ -n "${PACKAGES}" ]] && do_pre_install_packages
+
   if [[ "$BACKUP" == "Y" ]]; then
-    local name="${SHARE}/${BACKUP_FILE}.gz"
+    if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+      local name="${RESTORE_SHARE}/${BACKUP_FILE}.gz"
+    else
+      local name="${SHARE}/${BACKUP_FILE}.gz"
+    fi
     local backupExist="false"
 
     case $OPT in
       start)
         if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
           [[ -f ${name} ]] && backupExist="true"
-        else 
+        else
           if ( ${SSH_CMD} "[ -f ${name} ] && return 0 || return 1" ); then backupExist="true"; fi
         fi
 
         if [[ "${backupExist}" == "true" ]]; then
-          do_logger "Restoring: ram-root backup '${name}'"
+          do_logger "Info: restoring ram-root backup '${name}'"
           [[ "$VERBOSE" == "Y" ]] && start_progress
           [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
             && do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name} \
@@ -263,7 +271,7 @@ post_proc() {
   ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
     [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
-      [[ -z $ft ]] && { do_logger "Starting: services enabled in 'ram-root'"; ft="Y"; }
+      [[ -z $ft ]] && { do_logger "Info: starting services enabled in 'ram-root'"; ft="Y"; }
       do_exec /etc/init.d/${name:3} start
     }
   done
@@ -272,39 +280,39 @@ post_proc() {
   ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
     [[ -f /etc/rc.d/${name} ]] || {
-      [[ -z $ft ]] && { do_logger "Stopping: services disabled in 'ram-root'"; ft="Y"; }
+      [[ -z $ft ]] && { do_logger "Info: stopping services disabled in 'ram-root'"; ft="Y"; }
       do_exec /etc/init.d/${name:3} stop
     }
   done
 
   [[ -n "$START_SERVICES" ]] && {
-    do_logger "Starting: service(s) in '$CONFIG_NAME'"
+    do_logger "Info: starting service(s) in '$CONFIG_NAME'"
     for name in $START_SERVICES
     do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} start || do_logger "${name} not found"
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} start || do_logger "Notice: ${name} not found"
     done
   }
 
   [[ -n "$RESTART_SERVICES" ]] && {
-    do_logger "Re-starting: service(s) in '$CONFIG_NAME'"
+    do_logger "Info: re-starting service(s) in '$CONFIG_NAME'"
     for name in $RESTART_SERVICES
     do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} restart || do_logger "${name} not found"
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} restart || do_logger "Notice: ${name} not found"
     done
   }
 
   [[ -n "$STOP_SERVICES" ]] && {
-    do_logger "Stopping: service(s) in $CONFIG_NAME'"
+    do_logger "Info: stopping service(s) in $CONFIG_NAME'"
     for name in $STOP_SERVICES
     do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} stop || do_logger "${name} not found"
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} stop || do_logger "Notice: ${name} not found"
     done
   }
 
   [[ -f ${RCLOCAL_FILE} ]] && do_exec sh ${RCLOCAL_FILE}
 
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
-#  [[ -f /etc/init.d/zram ]] && if /etc/init.d/zram enabled; then sync; do_exec /etc/init.d/zram restart; fi
+  [[ -f /etc/init.d/zram ]] && if /etc/init.d/zram enabled; then sync; do_exec /etc/init.d/zram restart; fi
 
   sync
 
@@ -324,32 +332,29 @@ post_proc() {
 # BASE="${0##*}"
 
 OPT=${1}
+[[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
 
-[[ $# -ne 1 ]] && { do_logger "Info: need an option to run"; exit 1; }
-
-#[[ ! -f /tmp/ram-root-active && $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
-#[[   -f /tmp/ram-root-active && $(__occurs "init start reset"    $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' already running"; exit 1; }
-if [[ ! -f /tmp/ram-root-active ]]; then
-  __list_contains "stop backup upgrade" $OPT && { do_logger "Info: 'ram-root' not running"; exit 1; }
-else
-  __list_contains "init start reset"    $OPT && { do_logger "Info: 'ram-root' already running"; exit 1; }
-fi
-
-eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
 OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
-CONFIG_NAME="ram-root.cfg"
 
+CONFIG_NAME="ram-root.cfg"
 [[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/$CONFIG_NAME' not exist"; exit 1; }
 source ${RAM_ROOT}/${CONFIG_NAME}
 
+[[ $DEBUG == "Y" ]] && set -xv
+eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
 [ $INTERACTIVE_UPGRADE == 'Y' ] && INTERACTIVE="-i"
+
+if [[ ! -f /tmp/ram-root-active ]]; then
+  [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
+else
+  [[ $(__occurs "init start reset" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' already running"; exit 1; }
+fi
 
 if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
   do_logger "Info: previous attempt was not successful. Disabling auto-run"
   do_logger "Info: fix the problem & run 'rm /tmp/ram-root.failsafe' command to continue"
-#  [[ $HOME == "/" ]] && exit 1
   [[ -z "$PS1" ]] && exit 1
   type ask_bool >/dev/null || source /ram-root/functions/askbool.sh
   ask_bool $INTERACTIVE -t 5 -d N "\a\nDo you want to remove it now" && do_rm /tmp/ram-root.failsafe
@@ -357,9 +362,13 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
 fi
 
 SYSTEM_IP=$(uci get network.lan.ipaddr)
+[[ $(__occurs "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) ) -gt 0 ]] && SERVER=$SYSTEM_IP
 
-#[[ $(__occurs "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) ) -gt 0 ]] && SERVER=$SYSTEM_IP
-__list_contains "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) && SERVER=$SYSTEM_IP
+BACKUP_SHARE=${SHARE}
+RESTORE_SHARE=${SHARE}
+[[ ${SYSTEM_IP} == ${SERVER} && \
+   $(__occurs $(__lowercase ${SHARE}) ${OLD_ROOT}) -eq 0 ]] && BACKUP_SHARE="${OLD_ROOT}/${SHARE}" # make sure backup goes to < OLD-ROOT >
+
 SHARE="${SHARE}/${HOSTNAME}"
 SERVER_SHARE="${SERVER}:${SHARE}"
 NEW_ROOT="/tmp/root"
@@ -371,10 +380,7 @@ SSH_CMD="ssh $(__identity_file) ${USER}@${SERVER}/${PORT}"
 [[ -f $EXCLUDE_FILE && $(wc -c $EXCLUDE_FILE | awk {'print $1'}) -gt 0 ]] && EXCL="-X $EXCLUDE_FILE"
 [[ -f $INCLUDE_FILE && $(wc -c $INCLUDE_FILE | awk {'print $1'}) -gt 0 ]] && INCL="-T $INCLUDE_FILE"
 
-[[ $DEBUG == "Y" ]] && set -x -v
-#[[ $HOME == "/" ]] && VERBOSE="N"
 [[ -z "$PS1" ]] && VERBOSE="N"
-#[[ $OPT == "init" && $HOME != "/" ]] && VERBOSE="Y"
 [[ "$OPT" == "init" && -n "$PS1" ]] && VERBOSE="Y"
 [[ $VERBOSE == "Y" ]] && { type print_progress >/dev/null || source /ram-root/functions/printprogress.sh; }
 
@@ -401,13 +407,11 @@ esac
 [[ -d $NEW_ROOT    ]] && if ! rmdir $NEW_ROOT    >/dev/null; then do_error "Error: could not remove '$NEW_ROOT'"; fi
 [[ -d $NEW_OVERLAY ]] && if ! rmdir $NEW_OVERLAY >/dev/null; then do_error "Error: could not remove '$NEW_OVERLAY'"; fi
 
-# checking & installing required packages for init process
-if [[ "$OPT" == "init" ]]; then
-    type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
-    opkg_update $INTERACTIVE; [[ $? -gt 0 ]] && do_error "Updating repository failed"
+if [[ "$OPT" == "init" ]]; then # checking & installing required packages for init process
+    do_update_repositories
     do_install coreutils-stty
     [[ ${SYSTEM_IP} != ${SERVER} ]] && do_install netcat
-    do_initsetup
+    do_init
 fi
 
 pre_proc
@@ -431,5 +435,7 @@ post_proc
 
 [[ "$VERBOSE" == "Y" ]] && echo -ne "\a"
 do_logger "Info: *** Pivot-root successful ***"
+
+[[ $BACKUP == "Y" && $OPT == "init" ]] && do_backup # 1st backup
 
 exit 0

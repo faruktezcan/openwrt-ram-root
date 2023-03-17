@@ -10,11 +10,18 @@ and test new packages beyond your flash drive’s capacity to see how they work.
 
 -The ability of saving your ram drive in a local/remote directory and restoring it back to your router is also given to you as an option.
 
--If you want to install packages that should not be included in your backup, you can define them in the config file. These packages will be installed automatically  each time you start ram-root operation. Otherwise, all the packages that you install and/or other changes that you make will be saved by making a backup.
+-If you want to install packages that should not be included in your backup, you can define them in the config file. These packages will be installed
+automatically  each time you start ram-root operation. Otherwise, all the packages that you install and/or other changes that you make will be saved by
+making a backup.
  
--Example 1: Lets assume your router's flash capacity is very limited and you do not have another device for backups. By defining 'PACKAGES' in the config file  you can install them on-the-fly during ram-root process. If you change the configuration later, making a backup includes only those changes not the packages you defined. With that you are saving your flash drive's capacity. The penalty, in this case, is that those packages have to be installed next time if you reboot the router.
+-Example 1: Lets assume your router's flash capacity is very limited and you do not have another device for backups. By defining 'PACKAGES' in the config
+file  you can install them on-the-fly during ram-root process. If you change the configuration later, making a backup includes only those changes not the
+packages you defined. With that you are saving your flash drive's capacity. The penalty, in this case, is that those packages have to be installed next
+time if you reboot the router.
  
--Example 2: If you have another router or computer which is always reachable by your router and you want to use it for backups, then start the 'ram-root' process and  install the packages and set them up accordingly. Make a backup when you are satisfied with the changes. When you reboot the router next time and start the 'ram-root' process again everything will be restored back to your router again.
+-Example 2: If you have another router or computer which is always reachable by your router and you want to use it for backups, then start the 'ram-root'
+process and  install the packages and set them up accordingly. Make a backup when you are satisfied with the changes. When you reboot the router next time
+and start the 'ram-root' process again everything will be restored back to your router again.
 
 -Installing optional 'zram-swap' is highly adviced as this provides you approx. %50 more storage space.
 
@@ -22,6 +29,7 @@ and test new packages beyond your flash drive’s capacity to see how they work.
 
 
 Installation:
+
 +++++++++++++
 
 -Download the provided ‘zip’ file and extract 'ram-root' directory to root directory ( '/' ) of your device.
@@ -36,6 +44,7 @@ Installation:
 
 
 How to use:
+
 +++++++++++
 
 - '/etc/ram-root/ram-root.sh init'
@@ -66,6 +75,7 @@ Run 'opkg upgrade' command to upgrade the system.
 
 
 Notes:
+
 ++++++
 
 You can enable the autorun option by entering '/etc/init.d/ram-root enable' to boot your router through the 'ram-root',

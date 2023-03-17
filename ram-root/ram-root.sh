@@ -62,21 +62,26 @@ do_pidmsg() { # waits until given pid job is completed $1-pid #
 do_backup() { # creates ram-root backup
   local dir="/overlay/upper/"
   local backup_size=$(du -cs $dir | grep total | awk '{print $1*1024}')
+  local share=${SHARE}
   local server_free_space
 
   do_logger "Info: backup file size = ${backup_size} bytes"
 
-  [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
-    && { SHARE=${BACKUP_SHARE}; server_free_space=$(df -kP ${OLD_ROOT} | awk '$1 != "Filesystem" {print $4*1024}'); } \
-    || server_free_space=$(${SSH_CMD} "df -kP ${SHARE}" | awk '$1 != "Filesystem" {print $4*1024}')
-
+  if ( ${LOCAL_BACKUP} ); then
+    share=${BACKUP_SHARE}
+    [[ -d ${share} ]] || mkdir -p ${share}
+    server_free_space=$(df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}')
+  else
+    server_free_space=$(${SSH_CMD} "[[ -d ${share} ]] || mkdir -p ${share}; df -kP ${share}" | awk '$1 != "Filesystem" {print $4*1024}')
+  fi
+ 
   do_logger "Info: server ${SERVER} free space = ${server_free_space} bytes"
 
   if [[ $server_free_space -gt $backup_size ]]; then
     local nc="nice -n 19"
-    local name="${SHARE}/${BACKUP_FILE}.gz"
-    local cmd="mkdir -p ${SHARE}; [[ -f ${name} ]] && mv -f ${name} ${name}.~"
-    if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+    local name="${share}/${BACKUP_FILE}.gz"
+    local cmd="mkdir -p ${share}; [[ -f ${name} ]] && mv -f ${name} ${name}.~"
+    if ( ${LOCAL_BACKUP} ); then
       eval ${cmd}
       ${nc} tar -C $dir $EXCL $INCL -c -z -f ${name} . & >/dev/null
     else
@@ -91,7 +96,8 @@ do_backup() { # creates ram-root backup
 }
 
 do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_error (default Y)
-  [[ "${SERVER}" == "${SYSTEM_IP}" ]] && return 0
+  if ( ${LOCAL_BACKUP} ); then return 0; fi
+  
   if which netcat >/dev/null; then
     __wait_for_network
     local secs=${1:-60}
@@ -117,10 +123,13 @@ do_init() { # server setup
   case $VERSION in
     1* ) local key_type="rsa";;
     *  ) local key_type="ed25519"
-         eval SERVER_$(${SSH_CMD} "grep -e 'VERSION=' /usr/lib/os-release")
-         case $SERVER_VERSION in
-           1* ) local key_type="rsa";;
-         esac;;
+         if ( ${LOCAL_BACKUP} ); then
+           eval SERVER_$(${SSH_CMD} "grep -e 'VERSION=' /usr/lib/os-release")
+           case $SERVER_VERSION in
+             1* ) local key_type="rsa";;
+           esac
+         fi
+         ;;
   esac
 
   local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
@@ -138,7 +147,7 @@ do_init() { # server setup
              touch /etc/dropbear/authorized_keys; \
              sed -i '/${name}/d' /etc/dropbear/authorized_keys; \
              echo $key >> /etc/dropbear/authorized_keys"
-  if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+  if ( ${LOCAL_BACKUP} ); then
     eval ${cmd}
   else
     do_logger "Info: setting up server '$SERVER'"
@@ -224,7 +233,7 @@ pre_proc() {
   [[ -n "${PACKAGES}" ]] && do_pre_install_packages
 
   if [[ "$BACKUP" == "Y" ]]; then
-    if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+    if ( ${LOCAL_BACKUP} ); then
       local name="${RESTORE_SHARE}/${BACKUP_FILE}.gz"
     else
       local name="${SHARE}/${BACKUP_FILE}.gz"
@@ -233,7 +242,7 @@ pre_proc() {
 
     case $OPT in
       start)
-        if [[ "${SERVER}" == "${SYSTEM_IP}" ]]; then
+        if ( ${LOCAL_BACKUP} ); then
           [[ -f ${name} ]] && backupExist="true"
         else
           if ( ${SSH_CMD} "[ -f ${name} ] && return 0 || return 1" ); then backupExist="true"; fi
@@ -242,9 +251,11 @@ pre_proc() {
         if [[ "${backupExist}" == "true" ]]; then
           do_logger "Info: restoring ram-root backup '${name}'"
           [[ "$VERBOSE" == "Y" ]] && start_progress
-          [[ "${SERVER}" == "${SYSTEM_IP}" ]] \
-            && do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name} \
-            || do_exec ${SSH_CMD} "gzip -dc ${name}" | tar -C ${NEW_OVERLAY}/upper/ -x -f -
+          if ( ${LOCAL_BACKUP} ); then
+            do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}
+          else
+            do_exec ${SSH_CMD} "gzip -dc ${name}" | tar -C ${NEW_OVERLAY}/upper/ -x -f -
+          fi
           [ "$VERBOSE" == "Y" ] && kill_progress
         else
           do_logger "Info: backup file '${name}' not found"
@@ -341,9 +352,9 @@ CONFIG_NAME="ram-root.cfg"
 [[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/$CONFIG_NAME' not exist"; exit 1; }
 source ${RAM_ROOT}/${CONFIG_NAME}
 
-[[ $DEBUG == "Y" ]] && set -xv
+[[ "${DEBUG}" == "Y" ]] && set -xv
 eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
-[ $INTERACTIVE_UPGRADE == 'Y' ] && INTERACTIVE="-i"
+[[ "${INTERACTIVE_UPGRADE}" == "Y" ]] && INTERACTIVE="-i"
 
 if [[ ! -f /tmp/ram-root-active ]]; then
   [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
@@ -361,13 +372,20 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
   exit 1
 fi
 
-SYSTEM_IP=$(uci get network.lan.ipaddr)
-[[ $(__occurs "$(__lowercase $HOSTNAME) $SYSTEM_IP localhost 127.0.0.1" $(__lowercase $SERVER) ) -gt 0 ]] && SERVER=$SYSTEM_IP
+LOCAL_BACKUP=false
+#SYSTEM_IP=$(uci get network.lan.ipaddr)
+SYSTEM_IP=$(ifconfig br-lan | grep "inet addr" | cut -f2 -d':' | cut -f1 -d' ')
+if [[ $(__occurs "$(__lowercase ${HOSTNAME}) ${SYSTEM_IP} localhost 127.0.0.1" $(__lowercase ${SERVER}) ) -gt 0 ]]; then
+  SERVER=${SYSTEM_IP}
+  LOCAL_BACKUP=true
+fi
 
 BACKUP_SHARE=${SHARE}
 RESTORE_SHARE=${SHARE}
-[[ ${SYSTEM_IP} == ${SERVER} && \
-   $(__occurs $(__lowercase ${SHARE}) ${OLD_ROOT}) -eq 0 ]] && BACKUP_SHARE="${OLD_ROOT}/${SHARE}" # make sure backup goes to < OLD-ROOT >
+
+if ( ${LOCAL_BACKUP} ); then 
+  [[ $(__occurs $(__lowercase ${SHARE}) ${OLD_ROOT}) -eq 0 ]] && BACKUP_SHARE="${OLD_ROOT}/${SHARE}" # make sure backup goes to < OLD-ROOT >
+fi
 
 SHARE="${SHARE}/${HOSTNAME}"
 SERVER_SHARE="${SERVER}:${SHARE}"

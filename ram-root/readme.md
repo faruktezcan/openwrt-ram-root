@@ -32,15 +32,15 @@ Installation:
 
 +++++++++++++
 
--Download the provided ‘zip’ file and extract 'ram-root' directory to root directory ( '/' ) of your device.
+- Download the provided ‘zip’ file and extract 'ram-root' directory to root directory ( '/' ) of your device.
 
--After the extraction you should have a new directory named ‘/ram-root’.
+- After the extraction you should have a new directory named ‘/ram-root’.
 
--You should additionally make some changes in the ‘config’ file according to your needs before running the script for the 1st time.
+- You should additionally make some changes in the ‘config’ file according to your needs before running the script for the 1st time.
 
--Install optional 'zram-swap' package considering your available flash drive space.
+- Install optional 'zram-swap' package considering your available flash drive space.
 
--The script will check if all the required packages are installed and will do it automatically if not.
+- The script will check if all the required packages are installed and will do it automatically if not.
 
 
 How to use:

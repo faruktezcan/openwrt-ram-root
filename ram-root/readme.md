@@ -78,21 +78,21 @@ Notes:
 
 ++++++
 
-You can enable the autorun option by entering '/etc/init.d/ram-root enable' to boot your router through the 'ram-root',
+- You can enable the autorun option by entering '/etc/init.d/ram-root enable' to boot your router through the 'ram-root',
 if you make sure that everything works quite nicely.
 
-The previous state of the router is mounted under '/old-root'. You can simply switch to that and make changes to your base system.
+- The previous state of the router is mounted under '/old-root'. You can simply switch to that and make changes to your base system.
 
 
 Included scripts in 'tools' directory:
 ++++++++++++++++++++++++++++++++++++++
 
-'opkgclean.sh'   : Cleans unsuccesful installation attempt debris due to flash storage shortage
+- 'opkgclean.sh'   : Cleans unsuccesful installation attempt debris due to flash storage shortage
 
-'opkgdeps.sh'    : Lists all dependant packages for the given package
+- 'opkgdeps.sh'    : Lists all dependant packages for the given package
 
-'opkgupgrade.sh' : Upgrades whole system packages interactively
+- 'opkgupgrade.sh' : Upgrades whole system packages interactively
 
-'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later.
+- 'overlaypkgs.sh' : Saves user-installed packages before upgrade and restore them later.
 
-'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections.
+- 'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections.

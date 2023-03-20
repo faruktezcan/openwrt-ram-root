@@ -38,16 +38,18 @@ __wait_for_network() { # waits until local network is ready up to NETWORK_WAIT_T
 __printf() {
   [[ -z "${1}" ]] && return 1
 
+#  if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
+#  if [[ $1 =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # "Float!"
+#  if [[ $1 =~ [0-9] ]]; then # Mixed, some numbers
+
   if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
-    echo $1 | sed ':a; s/\B[0-9]\{3\}\>/,&/; ta'
-  elif [[ $1 =~ ^[+-]?[0-9]*\.[0-9]+$ ]]; then # "Float!"
-    echo $1; return 1
-  elif [[ $1 =~ [0-9] ]]; then # Mixed, some numbers
-    echo $1; return 1
-  else # No numbers!
-    echo $1; return 1
+    echo ${1} | sed ':a;s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/;ta'
+  elif [[ ${1} =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # "Float!"
+    echo "$( echo ${1} | cut -d'.', -f 1 | sed ':a;s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/;ta' ).$(echo $1 | cut -d'.', -f 2)"
+  else
+    echo ${1} | sed ':a;s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/;ta'
   fi
-  
+
   return 0
 }
 

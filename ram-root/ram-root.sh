@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/ash
 #set -xv # debug
 
 # Performs ext-root from ram drive as PIVOT root
-# By Faruk Tezcan  "tezcan.faruk@gmail.com"
+# By Faruk Tezcan  'tezcan.faruk@gmail.com'
 
 
 
@@ -11,7 +11,6 @@ __list_contains() { # returns 1 if $1 doesn't contain $2
   return 0
 }
 
-
 #__list_contains() { # returns 1 if $1 doesn't contain $2
 #  local T="${1/${2}/}"
 #  [[ ${#T} -eq ${#1} ]] && return 1
@@ -19,26 +18,42 @@ __list_contains() { # returns 1 if $1 doesn't contain $2
 #}
 
 __occurs() { # check if $1 (separated with $3) contains $2 & return the # of occurances
-  echo "${1}" | tr {{"${3:-" "}"}} {{'\n'}} | grep -F -c -x ${2}
+  echo "${1}" | tr {{"${3:-" "}"}} {{'\n'}} | grep -F -c -x "${2}"
 }
 
 __lowercase() { # converts $1 to lowercase & sets $2 as a variable with result if $2 defined
   local __resultvar=${2}
-  local __result=$(echo ${1} | awk '{print tolower($0)}')
+  local __result=$(echo "${1}" | awk '{print tolower($0)}')
   [[ "$__resultvar" ]] && eval $__resultvar="'$__result'" || echo -n "$__result"
 }
 
 __identity_file() { # lists identity file(s)
-  ls -1 /etc/dropbear/dropbear_* | while read name; do echo -n "-i ${name} "; done
+  find /etc/dropbear/dropbear_* | while read -r name; do echo -n "-i ${name} "; done
 }
 
 __wait_for_network() { # waits until local network is ready up to NETWORK_WAIT_TIME
   ubus -t ${NETWORK_WAIT_TIME} wait_for network 2>/dev/null
 }
 
+__printf() {
+  [[ -z "${1}" ]] && return 1
+
+  if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
+    echo $1 | sed ':a; s/\B[0-9]\{3\}\>/,&/; ta'
+  elif [[ $1 =~ ^[+-]?[0-9]*\.[0-9]+$ ]]; then # "Float!"
+    echo $1; return 1
+  elif [[ $1 =~ [0-9] ]]; then # Mixed, some numbers
+    echo $1; return 1
+  else # No numbers!
+    echo $1; return 1
+  fi
+  
+  return 0
+}
+
 do_exec() { # <command> executes a command
   local cmd="${@}"
-  do_logger "Info: processing command < ${cmd} >"
+  do_logger "Info: executing '${cmd}'"
   eval ${cmd} || do_error "Error: command failed. Return code: $?"
 }
 
@@ -51,12 +66,8 @@ do_logger() { # log msg
 do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   local secs=${2:-30}
   local name="/etc/rc.d/???ram-root"
-  [ -f ${name} ] && rm ${name} # remove autostart
-  name="${OLD_ROOT}${name}"
-  [ -f ${name} ] && rm ${name} # remove autostart
-
+  rm -f ${name} "${OLD_ROOT}${name}" # remove autostart
   sync
-
   do_logger "${1}"
   do_logger "Error: stopping 'ram-root' process"
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
@@ -90,46 +101,58 @@ do_mklink() { # makes symlink $1-file/dir $2-destination
   [[ -L ${2} ]] || do_exec ln -sf ${1} ${2}
 }
 
-do_pidmsg() { # waits until given pid job is completed $1-pid #
+do_pidmsg() { # waits until given pid job is completed $1-pid#  2-backup name
   while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
+  do_logger "Info: backup is created in ${2}"
   [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
-  do_logger "Info: backup finished"
 }
 
 do_backup() { # creates ram-root backup
   local dir="/overlay/upper/"
-  local backup_size=$(du -cs ${dir} | grep total | awk '{print $1*1024}')
+  local file="/tmp/ram-root.backup"
   local share=${SHARE}
   local server_free_space
 
-  do_logger "Info: backup file size = ${backup_size} bytes"
+  local backup_size=$( tar -C ${dir} ${EXCL} ${INCL} -c -z -f - . | wc -c )
+  do_logger "Info: backup size = $( __printf ${backup_size} ) bytes"
+
+  local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
+  do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
+
+  if [[ ${backup_size} -gt $(( ${free_memory} / 2 )) ]]; then # check memory availability
+    do_error "Error: not enough memory to carry on"
+  fi
 
   if ( ${LOCAL_BACKUP} ); then
     share=${LOCAL_BACKUP_SHARE}
-    [[ -d ${share} ]] || mkdir -p ${share}
-    server_free_space=$(df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}')
+    mkdir -p ${share}
+    server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
-    server_free_space=$(${SSH_CMD} "[[ -d ${share} ]] || mkdir -p ${share}; df -kP ${share}" | awk '$1 != "Filesystem" {print $4*1024}')
+    server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df -kP ${share}" )
+    server_free_space=$( echo "${server_free_space}" | awk '$1 != "Filesystem" {print $4*1024}' )
+  fi
+  do_logger "Info: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
+
+  if [[ ${server_free_space} -le ${backup_size} ]]; then
+    do_error "Error: backup size is too big"
   fi
 
-  do_logger "Info: server ${SERVER} free space = ${server_free_space} bytes"
+  local name="${share}/${BACKUP_FILE}.gz"
 
-  if [[ ${server_free_space} -gt ${backup_size} ]]; then
-    local nc="nice -n 19"
-    local name="${share}/${BACKUP_FILE}.gz"
-    local cmd="mkdir -p ${share}; [[ -f ${name} ]] && mv -f ${name} ${name}.~"
-    if ( ${LOCAL_BACKUP} ); then
-      eval ${cmd}
-      ${nc} tar -C ${dir} ${EXCL} ${INCL} -c -z -f ${name} . & >/dev/null
-    else
-      ${nc} tar -C ${dir} ${EXCL} ${INCL} -c -f - . | ${nc} ${SSH_CMD} "${cmd}; ${nc} gzip > ${name}" & >/dev/null
-    fi
-    do_pidmsg $! &
-    do_logger "Info: backup is running in background & will be created shortly"
+  tar -C ${dir} ${EXCL} ${INCL} -c -z -f ${file} . >/dev/null
+
+  if ( ${LOCAL_BACKUP} ); then
+    [[ -f ${name} ]] && mv -f ${name} ${name}~
+    mv -f ${file} ${name}
+    do_logger "Info: backup is created in ${share}"
+  else
+    ${SSH_CMD} "[[ -f ${name} ]] && mv -f ${name} ${name}~"
+    nice -n 19 ${SCP_CMD} ${file} "${USER}@${SERVER}:${name}" >/dev/null &
+    do_pidmsg $! "${SERVER}:${share}" &
+    do_logger "Info: backup is running in background"
+  fi
+
     [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
-  else
-    do_error "Error: backup file size is too big"
-  fi
 }
 
 do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_error (default Y)
@@ -340,7 +363,7 @@ post_proc() {
   sync
 
 # some cleanup
-  do_rm /tmp/ram-root.failsafe ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
 
   echo "PIVOT" > /tmp/ram-root-active
@@ -396,7 +419,7 @@ LOCAL_BACKUP_SHARE=${SHARE}
 LOCAL_RESTORE_SHARE=${SHARE}
 
 if ( ${LOCAL_BACKUP} ); then 
-  [[ $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}/${SHARE}" # make sure backup goes to < OLD-ROOT >
+  [[ $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 fi
 
 SHARE="${SHARE}/${HOSTNAME}"
@@ -405,7 +428,8 @@ NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
 PKGS_DIR="${NEW_OVERLAY}/lower"
 BACKUP_FILE="${BUILD_ID}.tar"
-SSH_CMD="ssh $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | awk {'print $1'}) -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | awk {'print $1'}) -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"

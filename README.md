@@ -17,7 +17,7 @@ If you want to install packages that should not be included in your backup, you 
 
 Example 1: Lets assume your router's flash capacity is very limited and you do not have another device for backups. By defining 'PACKAGES' in the config file you can install them on-the-fly during ram-root process. If you change the configuration later, making a backup includes only those changes not the packages you defined. With that you are saving your flash drive's capacity. The penalty, in this case, is that those packages have to be installed next time if you reboot the router.
 
-Example 2: If you have another router or computer which is always reachable by your router and you want to use it for backups, then start the 'ram-root' process and install the packages and set them up accordingly. Make a backup when you are satisfied with the changes. When you reboot the router next time and start the 'ram-root' process again everything will be restored back to your router again.
+Example 2: If you have another router or computer which is always reachable by your router and you want to use it for backups, then start the 'ram-root' process and install the packages and set them up accordingly. Make a backup when you are satisfied with the changes. When you reboot the router next time and start the 'ram-root' process again everything will be restored back to your router.
 
 Installing optional 'zram-swap' is highly adviced as this provides you approx. %50 more storage space.
 

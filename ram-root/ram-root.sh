@@ -43,7 +43,7 @@ __printf() {
 #  elif [[ $1 =~ [0-9] ]]; then # Mixed
 #  else # then 
 
-  if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
+  if [[ ${1} =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
   elif [[ ${1} =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # "Float!"
     echo "$( echo ${1} | cut -d'.', -f1 | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta' ).$(echo $1 | cut -d'.', -f2)"
@@ -54,6 +54,10 @@ __printf() {
   return 0
 }
 
+__beep() {
+  [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
+}
+
 do_exec() { # <command> executes a command
   local cmd="${@}"
   do_logger "Info: executing '${cmd}'"
@@ -61,9 +65,7 @@ do_exec() { # <command> executes a command
 }
 
 do_logger() { # log msg
-  local stderr
-  [[ "${VERBOSE}" == "Y" ]] && stderr="-s"
-  logger ${stderr} -p info -t ram-root "${1}"
+  logger ${STDERR} -p info -t ram-root "${1}"
 }
 
 do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
@@ -76,8 +78,9 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
   [ "${VERBOSE}" == "Y" ] && {
     echo -e "\a\nRebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
+    __beep
     do_countdown ${secs}
-    echo -ne "\a"
+    __beep
   }
   reboot &
   sleep 30
@@ -107,7 +110,7 @@ do_mklink() { # makes symlink $1-file/dir $2-destination
 do_pidmsg() { # waits until given pid job is completed $1-pid#  2-backup name
   while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
   do_logger "Info: backup is created in ${2}"
-  [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
+  __beep
 }
 
 do_backup() { # creates ram-root backup
@@ -122,11 +125,9 @@ do_backup() { # creates ram-root backup
   local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
   do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
 
-  if [[ ${backup_size} -gt $(( ${free_memory} / 2 )) ]]; then # check memory availability
-    do_error "Error: not enough memory to carry on"
-  fi
+  [[ ${backup_size} -gt $(( ${free_memory} / 2 )) ]] && do_error "Error: not enough memory to carry on"
 
-  if ( ${LOCAL_BACKUP} ); then
+  if ${LOCAL_BACKUP}; then
     share=${LOCAL_BACKUP_SHARE}
     mkdir -p ${share}
     server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
@@ -136,33 +137,27 @@ do_backup() { # creates ram-root backup
   fi
   do_logger "Info: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
 
-  if [[ ${server_free_space} -le ${backup_size} ]]; then
-    do_error "Error: backup size is too big"
-  fi
+  [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size is too big"
 
   local name="${share}/${BACKUP_FILE}.gz"
-
-  tar -C ${dir} ${EXCL} ${INCL} -c -z -f ${file} . >/dev/null
-
-  if ( ${LOCAL_BACKUP} ); then
-    [[ -f ${name} ]] && mv -f ${name} ${name}~
-    mv -f ${file} ${name}
-    do_logger "Info: backup is created in ${share}"
+  local tar_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
+  if ${LOCAL_BACKUP}; then
+    ${tar_cmd}
+    tar -C ${dir} ${EXCL} ${INCL} -c -z -f ${name} . >/dev/null
+    do_logger "Info: backup is created in ${name}"
   else
-    ${SSH_CMD} "[[ -f ${name} ]] && mv -f ${name} ${name}~"
-    nice -n 19 ${SCP_CMD} ${file} "${USER}@${SERVER}:${name}" >/dev/null &
-    do_pidmsg $! "${SERVER}:${share}" &
     do_logger "Info: backup is running in background"
+    nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - . | ${SSH_CMD} "${tar_cmd}; cat > ${name}" &
+    do_pidmsg $! "${SERVER}:${name}" &
   fi
 
-    [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
+  __beep
 }
 
 do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_error (default Y)
+  ${LOCAL_BACKUP} && return 0
+
   __wait_for_network
-
-  if ( ${LOCAL_BACKUP} ); then return 0; fi
-
   if which netcat >/dev/null; then
     local secs=${1:-60}
     local msg=${secs}
@@ -173,6 +168,7 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
       [ "${VERBOSE}" == "Y" ] && printf "\a\r%2d" ${secs}
       let secs--
     done
+
     echo
     local msg="Error: connection lost to server '${SERVER}' port '${PORT}'"
     [[ "$2" != "N" ]] && do_error "${msg}"
@@ -185,12 +181,15 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
 
 do_init() { # server setup
   case ${VERSION} in
-    1* ) local key_type="rsa";;
+    1* ) local key_type="rsa"
+         ;;
+
     *  ) local key_type="ed25519"
-         if ( ${LOCAL_BACKUP} ); then
+         if ${LOCAL_BACKUP}; then
            eval SERVER_$(${SSH_CMD} "grep -e 'VERSION=' /usr/lib/os-release")
            case ${SERVER_VERSION} in
-             1* ) local key_type="rsa";;
+             1* ) local key_type="rsa"
+                  ;;
            esac
          fi
          ;;
@@ -211,7 +210,7 @@ do_init() { # server setup
              touch /etc/dropbear/authorized_keys; \
              sed -i '/${name}/d' /etc/dropbear/authorized_keys; \
              echo ${key} >> /etc/dropbear/authorized_keys"
-  if ( ${LOCAL_BACKUP} ); then
+  if ${LOCAL_BACKUP}; then
     eval ${cmd}
   else
     do_logger "Info: setting up server '$SERVER'"
@@ -220,14 +219,16 @@ do_init() { # server setup
 }
 
 do_pre_proc_packages() { # installs non-backable, non-preserved packages after reboots
-  do_logger "Info: installing package(s)- ${PACKAGES}"
+  [[ -z "${PACKAGES}" ]] && return 0
+
+  do_logger "Info: installing package(s) -> ${PACKAGES}"
+  mkdir -p ${NEW_OVERLAY}/lower
+  LOWER_NAME="${NEW_OVERLAY}/lower:"
+
   cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
-  echo "dest ram-root ${PKGS_DIR}" >> /tmp/opkg_ram-root.conf
+  echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
   do_update_repositories
-  for name in ${PACKAGES}
-  do
-    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
-  done
+  for name in ${PACKAGES}; do do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"; done
   rm -f /tmp/opkg_ram-root.conf
 }
 
@@ -255,56 +256,51 @@ pre_proc() {
   do_rm /tmp/ram-root-active
   touch /tmp/ram-root.failsafe
 
-  [[ "${OPT}" == "init" ]] && {
+  if [[ "${OPT}" == "init" ]]; then
     do_mklink /ram-root/init.d/ram-root /etc/init.d
     local name="/root/.profile"
     touch ${name}
     sed -i '/shell_prompt/d' ${name}
     echo -e "\n. /ram-root/shell_prompt" >> ${name}
-  }
+  fi
 
-  mkdir -p ${NEW_OVERLAY}
   do_logger "Info: creating ram disk"
+  mkdir -p ${NEW_OVERLAY}
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
-  mkdir -p ${NEW_ROOT} ${PKGS_DIR} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
+  mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
-  [[ -n "${PACKAGES}" ]] && do_pre_proc_packages
+  do_pre_proc_packages
 
   if [[ "${BACKUP}" == "Y" ]]; then
-    if ( ${LOCAL_BACKUP} ); then
-      local name="${LOCAL_RESTORE_SHARE}/${BACKUP_FILE}.gz"
-    else
-      local name="${SHARE}/${BACKUP_FILE}.gz"
-    fi
-    local backupExist="false"
+    ${LOCAL_BACKUP} \
+      && local name="${LOCAL_RESTORE_SHARE}/${BACKUP_FILE}.gz" \
+      || local name="${SHARE}/${BACKUP_FILE}.gz"
 
     case ${OPT} in
       start)
-        if ( ${LOCAL_BACKUP} ); then
-          [[ -f ${name} ]] && backupExist="true"
-        else
-          if ( ${SSH_CMD} "[ -f ${name} ] && return 0 || return 1" ); then backupExist="true"; fi
-        fi
+        local backupExist=false
+        ${LOCAL_BACKUP} \
+          && { [[ -f ${name} ]] && backupExist=true; } \
+          || { ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true; }
 
-        if [[ "${backupExist}" == "true" ]]; then
-          do_logger "Info: restoring ram-root backup '${name}'"
+        if ${backupExist}; then
+          do_logger "Info: restoring backup file '${name}'"
           [[ "${VERBOSE}" == "Y" ]] && start_progress
-          if ( ${LOCAL_BACKUP} ); then
-            do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}
-          else
-            do_exec ${SSH_CMD} "gzip -dc ${name}" | tar -C ${NEW_OVERLAY}/upper/ -x -f -
-          fi
-          [ "${VERBOSE}" == "Y" ] && kill_progress
+          ${LOCAL_BACKUP} \
+            && do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name} \
+            || do_exec ${SSH_CMD} "gzip -dc ${name}" | tar -C ${NEW_OVERLAY}/upper/ -x -f -
+          [[ "${VERBOSE}" == "Y" ]] && kill_progress
         else
-          do_logger "Info: backup file '${name}' not found"
+          do_logger "Notice: backup file '${name}' not found"
         fi
         ;;
+
       reset)
         do_logger "Info: bypassing backup file '${name}'"
         ;;
     esac
-  fi
 
+  fi
 } # pre_proc
 
 ###################################
@@ -359,17 +355,15 @@ post_proc() {
   }
 
   [[ -f ${RCLOCAL_FILE} ]] && do_exec sh ${RCLOCAL_FILE}
-
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
   [[ -f /etc/init.d/zram ]] && if /etc/init.d/zram enabled; then sync; do_exec /etc/init.d/zram restart; fi
 
-  sync
-
-# some cleanup
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
 
   echo "PIVOT" > /tmp/ram-root-active
+
+  sync
 } # post_proc
 
 ###################################
@@ -410,87 +404,82 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
   exit 1
 fi
 
-LOCAL_BACKUP=false
-#SYSTEM_IP=$(uci get network.lan.ipaddr)
 SYSTEM_IP=$(ifconfig br-lan | grep "inet addr" | cut -f2 -d':' | cut -f1 -d' ')
-if [[ $(__occurs "$(__lowercase ${HOSTNAME}) ${SYSTEM_IP} localhost 127.0.0.1" $(__lowercase ${SERVER}) ) -gt 0 ]]; then
-  SERVER=${SYSTEM_IP}
-  LOCAL_BACKUP=true
-fi
-
-LOCAL_BACKUP_SHARE=${SHARE}
+LOCAL_BACKUP=false
+[[ $(__occurs "$(__lowercase ${HOSTNAME}) ${SYSTEM_IP} localhost 127.0.0.1" $(__lowercase ${SERVER}) ) -gt 0 ]] && { SERVER=${SYSTEM_IP}; LOCAL_BACKUP=true; }
 LOCAL_RESTORE_SHARE=${SHARE}
-
-if ( ${LOCAL_BACKUP} ); then 
-  [[ $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
-fi
-
+LOCAL_BACKUP_SHARE=${SHARE}
+[[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 SHARE="${SHARE}/${HOSTNAME}"
 SERVER_SHARE="${SERVER}:${SHARE}"
 NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
-PKGS_DIR="${NEW_OVERLAY}/lower"
 BACKUP_FILE="${BUILD_ID}.tar"
 SSH_CMD="ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
-SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
-
-[[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | awk {'print $1'}) -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
-[[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | awk {'print $1'}) -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"
-
+#SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
+LOWER_NAME=""
+[[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
+[[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"
 [[ -z "${PS1}" ]] && VERBOSE="N"
 [[ "${OPT}" == "init" && -n "${PS1}" ]] && VERBOSE="Y"
-[[ "${VERBOSE}" == "Y" ]] && { type print_progress >/dev/null || source /ram-root/functions/printprogress.sh; }
+
+if [[ "${VERBOSE}" == "Y" ]]; then
+  type print_progress >/dev/null || source /ram-root/functions/printprogress.sh
+  STDERR="-s"
+fi
 
 case ${OPT} in
-  init|start|reset) ;;
+  init|start|reset)
+    ;;
+
   backup|stop)
     [[ -f /tmp/ram-root-active ]] || { do_logger "Info: 'ram-root' not running"; exit 1; }
     [[ "${BACKUP}" == "Y" ]] || do_logger "Info: backup option is not selected" && {
-      do_chkconnection 60 "N" && {
-        do_backup
-        sync
-        [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
+      if do_chkconnection 60 "N"; then
+        do_backup; sync; [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
         exit 0
-      }
+      fi
       do_logger "Info: no response from server '${SERVER}' port '${PORT}'"
     }
     [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
     exit 1
     ;;
-  upgrade) ${RAM_ROOT}/tools/opkgupgrade.sh -i; exit 0 ;;
-  *) do_logger "Info: invalid option: '${OPT}'"; exit 1 ;;
+
+  upgrade)
+    ${RAM_ROOT}/tools/opkgupgrade.sh -i
+    exit 0
+    ;;
+
+  *)
+    do_logger "Info: invalid option: '${OPT}'"
+    exit 1
+    ;;
 esac
 
 [[ -d ${NEW_ROOT}    ]] && if ! rmdir ${NEW_ROOT}    >/dev/null; then do_error "Error: could not remove '${NEW_ROOT}'"; fi
 [[ -d ${NEW_OVERLAY} ]] && if ! rmdir ${NEW_OVERLAY} >/dev/null; then do_error "Error: could not remove '${NEW_OVERLAY}'"; fi
 
 if [[ "$OPT" == "init" ]]; then # checking & installing required packages for init process
-    do_update_repositories
-    do_install coreutils-stty
-    [[ ${SYSTEM_IP} != ${SERVER} ]] && do_install netcat
-    do_init
+  do_update_repositories
+  do_install coreutils-stty
+  ${LOCAL_BACKUP} || do_install netcat
+  do_init
 fi
 
 pre_proc
 
-if [[ -z "${PACKAGES}" ]]; then
-  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
-else
-  do_exec mount -t overlay -o noatime,lowerdir=${PKGS_DIR}:/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
-fi
+do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
+
 mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
 do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
-for dir in /dev /sys /tmp
-do
-  do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}
-done
+for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
 do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
 
 post_proc
 
-[[ "$VERBOSE" == "Y" ]] && echo -ne "\a"
+__beep
 do_logger "Info: *** Pivot-root successful ***"
 
 [[ "${BACKUP}" == "Y" && "${OPT}" == "init" ]] && do_backup # 1st backup

@@ -41,7 +41,7 @@ __printf() {
 #  if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # Integer
 #  elif [[ $1 =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # Float
 #  elif [[ $1 =~ [0-9] ]]; then # Mixed
-#  else # then 
+#  else # then
 
   if [[ ${1} =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
@@ -55,13 +55,13 @@ __printf() {
 }
 
 __beep() {
-  [[ "${VERBOSE}" == "Y" ]] && echo -ne "\a"
+  [[ "${VERBOSE}" == "Y" ]] && echo -e "\a"
 }
 
 do_exec() { # <command> executes a command
   local cmd="${@}"
   do_logger "Info: executing '${cmd}'"
-  eval ${cmd} || do_error "Error: command failed. Return code: $?"
+  ${cmd} || do_error "Error: command failed. Return code: $?"
 }
 
 do_logger() { # log msg
@@ -78,9 +78,7 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
   [ "${VERBOSE}" == "Y" ] && {
     echo -e "\a\nRebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
-    __beep
     do_countdown ${secs}
-    __beep
   }
   reboot &
   sleep 30
@@ -92,8 +90,8 @@ do_countdown() { # <seconds> $1-seconds(default=60)
   local secs=${1:-60}
   while [ ${secs} -gt 0 ]
   do
-    printf "\r%2d" ${secs}
-    let secs--
+    printf "\a\r%2d" ${secs}
+    secs=$(( ${secs}-1 ))
     sleep 1
   done
   echo
@@ -110,14 +108,11 @@ do_mklink() { # makes symlink $1-file/dir $2-destination
 do_pidmsg() { # waits until given pid job is completed $1-pid#  2-backup name
   while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
   do_logger "Info: backup is created in ${2}"
-  __beep
 }
 
 do_backup() { # creates ram-root backup
   local dir="/overlay/upper/"
   local file="/tmp/ram-root.backup"
-  local share=${SHARE}
-  local server_free_space
 
   local backup_size=$( tar -C ${dir} ${EXCL} ${INCL} -c -z -f - . | wc -c )
   do_logger "Info: backup size = $( __printf ${backup_size} ) bytes"
@@ -128,11 +123,12 @@ do_backup() { # creates ram-root backup
   [[ ${backup_size} -gt $(( ${free_memory} / 2 )) ]] && do_error "Error: not enough memory to carry on"
 
   if ${LOCAL_BACKUP}; then
-    share=${LOCAL_BACKUP_SHARE}
+    local share=${LOCAL_BACKUP_SHARE}
     mkdir -p ${share}
-    server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
+    local server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
-    server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df -kP ${share}" )
+    local share=${SHARE}
+    local server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df -kP ${share}" )
     server_free_space=$( echo "${server_free_space}" | awk '$1 != "Filesystem" {print $4*1024}' )
   fi
   do_logger "Info: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
@@ -140,14 +136,14 @@ do_backup() { # creates ram-root backup
   [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size is too big"
 
   local name="${share}/${BACKUP_FILE}.gz"
-  local tar_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
+  local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
+
   if ${LOCAL_BACKUP}; then
-    ${tar_cmd}
     tar -C ${dir} ${EXCL} ${INCL} -c -z -f ${name} . >/dev/null
     do_logger "Info: backup is created in ${name}"
   else
     do_logger "Info: backup is running in background"
-    nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - . | ${SSH_CMD} "${tar_cmd}; cat > ${name}" &
+    nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - . | ${SSH_CMD} "${mv_cmd}; cat > ${name}" >/dev/null &
     do_pidmsg $! "${SERVER}:${name}" &
   fi
 
@@ -160,13 +156,12 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
   __wait_for_network
   if which netcat >/dev/null; then
     local secs=${1:-60}
-    local msg=${secs}
+    do_logger "Info: checking connection on server '${SERVER}' port '${PORT}'"
     while [[ ${secs} -gt 0 ]]
     do
-      [[ ${msg} -eq ${secs} ]] && do_logger "Info: checking connection on server '${SERVER}' port '${PORT}'"
       netcat -w 1 -z ${SERVER} ${PORT} >/dev/null && return 0
       [ "${VERBOSE}" == "Y" ] && printf "\a\r%2d" ${secs}
-      let secs--
+      secs=$(( ${secs}-1 ))
     done
 
     echo
@@ -176,53 +171,51 @@ do_chkconnection() { # checks internet connection $1-seconds(default=60) $2-do_e
     return 1
   else
     do_error "'netcat' package must be installed"
+    return 1
   fi
 }
 
 do_init() { # server setup
-  case ${VERSION} in
-    1* ) local key_type="rsa"
-         ;;
+  if ${LOCAL_BACKUP}; then
+    mkdir -p ${SHARE}
+    return 0
+  fi
 
-    *  ) local key_type="ed25519"
-         if ${LOCAL_BACKUP}; then
-           eval SERVER_$(${SSH_CMD} "grep -e 'VERSION=' /usr/lib/os-release")
-           case ${SERVER_VERSION} in
-             1* ) local key_type="rsa"
-                  ;;
-           esac
-         fi
-         ;;
+  local key_types="rsa"
+  case ${VERSION} in
+    2*) key_types="rsa ed25519" ;;
   esac
 
-  local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
+  do_logger "Info: setting up first time"
 
-  do_logger "Info: setting up 'local system'"
-  mkdir -p /root/.ssh
-  [[ -f ${key_file} ]] || do_exec dropbearkey -t ${key_type} -f ${key_file}
-  do_mklink ${key_file} /root/.ssh/id_${key_type}
-  do_mklink ${key_file} /root/.ssh/id_dropbear
+  for key_type in ${key_types}
+  do
+    local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
+    [[ -f ${key_file} ]] || do_exec dropbearkey -t ${key_type} -f ${key_file}
+    do_mklink ${key_file} /root/.ssh/id_${key_type}
+    do_mklink ${key_file} /root/.ssh/id_dropbear
 
-  local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
-  local name=$(echo ${key} | awk '{print $3}')
-  local msg="Error: server '${SERVER}' setup not completed. Return code: "
-  local cmd="mkdir -p ${SHARE}; \
-             touch /etc/dropbear/authorized_keys; \
-             sed -i '/${name}/d' /etc/dropbear/authorized_keys; \
-             echo ${key} >> /etc/dropbear/authorized_keys"
-  if ${LOCAL_BACKUP}; then
-    eval ${cmd}
-  else
-    do_logger "Info: setting up server '$SERVER'"
-    ${SSH_CMD} "${cmd}" || do_error "${msg} $?"
-  fi
+    local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
+    local name=$(echo ${key} | awk '{print $3}')
+    local cmd="touch /etc/dropbear/authorized_keys; \
+               sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
+               sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
+               echo ${key} >> /etc/dropbear/authorized_keys"
+    ${SSH_CMD} "${cmd}" || do_error "Error: server '${SERVER}' setup not completed. Return code: $?"
+  done
+
+  do_mklink /ram-root/init.d/ram-root /etc/init.d
+  name="/root/.profile"
+  touch ${name}
+  sed -i '/shell_prompt/d' ${name}
+  echo -e "\n. /ram-root/shell_prompt" >> ${name}
 }
 
 do_pre_proc_packages() { # installs non-backable, non-preserved packages after reboots
   [[ -z "${PACKAGES}" ]] && return 0
 
   do_logger "Info: installing package(s) -> ${PACKAGES}"
-  mkdir -p ${NEW_OVERLAY}/lower
+  do_exec mkdir -p ${NEW_OVERLAY}/lower
   LOWER_NAME="${NEW_OVERLAY}/lower:"
 
   cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
@@ -256,18 +249,10 @@ pre_proc() {
   do_rm /tmp/ram-root-active
   touch /tmp/ram-root.failsafe
 
-  if [[ "${OPT}" == "init" ]]; then
-    do_mklink /ram-root/init.d/ram-root /etc/init.d
-    local name="/root/.profile"
-    touch ${name}
-    sed -i '/shell_prompt/d' ${name}
-    echo -e "\n. /ram-root/shell_prompt" >> ${name}
-  fi
-
   do_logger "Info: creating ram disk"
-  mkdir -p ${NEW_OVERLAY}
+  do_exec mkdir -p ${NEW_OVERLAY}
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
-  mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
+  do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
   do_pre_proc_packages
 
@@ -301,6 +286,8 @@ pre_proc() {
     esac
 
   fi
+
+  sync
 } # pre_proc
 
 ###################################
@@ -312,8 +299,7 @@ post_proc() {
   [ "${VERBOSE}" == "Y" ] && echo -e "\a\nInfo: *** Re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond ***"
   do_chkconnection ${NETWORK_WAIT_TIME}
 
-  local ft=""
-  ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
+  local ft=""; ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
     [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
       [[ -z ${ft} ]] && { do_logger "Info: starting services enabled in 'ram-root'"; ft="Y"; }
@@ -321,8 +307,7 @@ post_proc() {
     }
   done
 
-  ft=""
-  ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read name
+  ft=""; ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
     [[ -f /etc/rc.d/${name} ]] || {
       [[ -z ${ft} ]] && { do_logger "Info: stopping services disabled in 'ram-root'"; ft="Y"; }
@@ -363,6 +348,8 @@ post_proc() {
 
   echo "PIVOT" > /tmp/ram-root-active
 
+  [[ "${BACKUP}" == "Y" && "${OPT}" == "init" ]] && do_backup # 1st backup
+
   sync
 } # post_proc
 
@@ -374,8 +361,9 @@ post_proc() {
 
 # BASE="${0##*}"
 
-OPT=${1}
 [[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
+
+OPT=${1}
 
 OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
@@ -417,7 +405,7 @@ NEW_OVERLAY="/tmp/overlay"
 BACKUP_FILE="${BUILD_ID}.tar"
 SSH_CMD="ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
-LOWER_NAME=""
+
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"
 [[ -z "${PS1}" ]] && VERBOSE="N"
@@ -470,7 +458,7 @@ pre_proc
 
 do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
 
-mkdir -p ${NEW_ROOT}${OLD_ROOT}
+do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
 do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
@@ -481,7 +469,5 @@ post_proc
 
 __beep
 do_logger "Info: *** Pivot-root successful ***"
-
-[[ "${BACKUP}" == "Y" && "${OPT}" == "init" ]] && do_backup # 1st backup
 
 exit 0

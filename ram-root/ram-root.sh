@@ -145,8 +145,6 @@ do_backup() { # create ram-root backup
     eval "${cmd}"
     do_logger "Info: created in ${SERVER}:${name}"
   fi # BACKGROUND_BACKUP
-
-  __beep
 }
 
 do_restore() { # restore ram-root backup
@@ -341,8 +339,11 @@ post_proc() {
 
   echo "PIVOT" > /tmp/ram-root-active
 
-  [[ ${BACKUP} && "${OPT}" == "init" ]] && do_backup # 1st backup
-
+  if [[ ${BACKUP} && "${OPT}" == "init" ]]; then
+    if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
+      do_backup # 1st backup
+    fi 
+  fi
   sync
 } # post_proc
 
@@ -368,13 +369,6 @@ source ${RAM_ROOT}/${CONFIG_NAME}
 ${DEBUG} && set -xv
 ${INTERACTIVE_UPGRADE} && INTERACTIVE="-i"
 eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
-
-if [[ ! -f /tmp/ram-root-active ]]; then
-  [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
-else
-  [[ $(__occurs "init start reset" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' already running"; exit 1; }
-fi
-
 if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
   do_logger "Info: previous attempt was not successful. Disabling auto-run"
@@ -400,12 +394,18 @@ SSH_CMD="ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"
-[[ -z "${PS1}" ]] && VERBOSE="N"
-[[ "${OPT}" == "init" && -n "${PS1}" ]] && VERBOSE="Y"
+[[ -z "${PS1}" ]] && VERBOSE=false
+[[ "${OPT}" == "init" && -n "${PS1}" ]] && VERBOSE=true
 
 if ${VERBOSE}; then
   type print_progress >/dev/null || source /ram-root/functions/printprogress.sh
   STDERR="-s"
+fi
+
+if [[ ! -f /tmp/ram-root-active ]]; then
+  [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
+else
+  [[ $(__occurs "init start reset" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' already running"; exit 1; }
 fi
 
 [[ -d ${NEW_ROOT}    ]] && if ! rmdir ${NEW_ROOT}    >/dev/null; then do_error "Error: could not remove '${NEW_ROOT}'"; fi
@@ -424,8 +424,9 @@ case ${OPT} in
   backup|stop)
     [[ -f /tmp/ram-root-active ]] || { do_logger "Info: 'ram-root' not running"; exit 1; }
     ${BACKUP} || do_logger "Info: backup option is not selected" && {
-      if do_chkconnection 60 "N"; then
+      if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
         do_backup
+        __beep    
         sync
         [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
         exit 0

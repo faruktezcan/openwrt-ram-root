@@ -172,7 +172,7 @@ do_restore() { # restore ram-root backup
         [[ "${VERBOSE}" == "Y" ]] && start_progress
         ${LOCAL_BACKUP} \
           && eval "do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}" \
-          || eval "do_exec ${SSH_CMD} \"gzip -dc ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -f -"
+          || eval "do_exec ${SSH_CMD} \"pv -q ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -z -f -"
         [[ "${VERBOSE}" == "Y" ]] && kill_progress
       else
         do_logger "Notice: backup file '${name}' not found"
@@ -295,7 +295,7 @@ pre_proc() {
 #     POST INSTALL PROCEDURE      #
 ###################################
 post_proc() {
-  [ "${VERBOSE}" == "Y" ] && echo -e "\a\nNotice: Re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
+  [ "${VERBOSE}" == "Y" ] && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
 
   do_exec /etc/init.d/network restart
   do_chkconnection ${NETWORK_WAIT_TIME}
@@ -344,7 +344,7 @@ post_proc() {
 
   [[ -f ${RCLOCAL_FILE} ]] && do_exec sh ${RCLOCAL_FILE}
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
-  if [[ -f /etc/init.d/zram && /etc/init.d/zram enabled ]]; then
+  if [[ -f /etc/init.d/zram && $(/etc/init.d/zram enabled) ]]; then
     sync
     do_exec /etc/init.d/zram restart
   fi

@@ -172,7 +172,8 @@ do_restore() { # restore ram-root backup
         [[ "${VERBOSE}" == "Y" ]] && start_progress
         ${LOCAL_BACKUP} \
           && eval "do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}" \
-          || eval "do_exec ${SSH_CMD} \"pv -q ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -z -f -"
+          || eval "do_exec ${SSH_CMD} \"gzip -dc ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -f -"
+#          || eval "do_exec ${SSH_CMD} \"pv -q ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -z -f -"
         [[ "${VERBOSE}" == "Y" ]] && kill_progress
       else
         do_logger "Notice: backup file '${name}' not found"

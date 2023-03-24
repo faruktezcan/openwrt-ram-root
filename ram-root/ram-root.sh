@@ -344,11 +344,6 @@ post_proc() {
 
   [[ -f ${RCLOCAL_FILE} ]] && do_exec sh ${RCLOCAL_FILE}
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
-  if [[ -f /etc/init.d/zram && $(/etc/init.d/zram enabled) ]]; then
-    sync
-    do_exec /etc/init.d/zram restart
-  fi
-
   do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
 

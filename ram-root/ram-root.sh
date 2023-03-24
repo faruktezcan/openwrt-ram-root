@@ -38,11 +38,6 @@ __wait_for_network() { # wait until local network is ready up to NETWORK_WAIT_TI
 __printf() { # formatted numeric output
   [[ -z "${1}" ]] && { echo "Empty value!"; return 1; }
 
-#  if [[ $1 =~ ^[+-]?[0-9]+$ ]]; then # Integer
-#  elif [[ $1 =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # Float
-#  elif [[ $1 =~ [0-9] ]]; then # Mixed
-#  else # then
-
   if [[ ${1} =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
   elif [[ ${1} =~ ^[+-]?[0-9]*\.?[0-9]+$ ]]; then # "Float!"
@@ -50,12 +45,10 @@ __printf() { # formatted numeric output
   else # Mixed
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
   fi
-
-  return 0
 }
 
 __beep() {
-  [[ "${VERBOSE}" == "Y" ]] && echo -e "\a"
+  ${VERBOSE} && echo -e "\a"
 }
 
 do_exec() { # <command> execute command(s)
@@ -76,8 +69,8 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   do_logger "${1}"
   do_logger "Error: stopping 'ram-root' process"
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
-  [ "${VERBOSE}" == "Y" ] && {
-    echo -e "\a\nRebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
+  ${VERBOSE} && {
+    echo -e "\aram-root: Notice: rebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
     do_countdown ${secs}
   }
   reboot &
@@ -94,7 +87,6 @@ do_countdown() { # <seconds> $1-seconds(default=60)
     secs=$(( ${secs}-1 ))
     sleep 1
   done
-  echo
 }
 
 do_rm() { # remove dir or file(s)
@@ -120,9 +112,9 @@ do_backup() { # create ram-root backup
   do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
 
   do_logger "Info: calculating backup size"
-  [[ "${VERBOSE}" == "Y" ]] && start_progress
+  ${VERBOSE} && start_progress
   local backup_size=$( ${tar_cmd} | wc -c )
-  [[ "${VERBOSE}" == "Y" ]] && kill_progress
+  ${VERBOSE} && kill_progress
   do_logger "Notice: backup size = $( __printf ${backup_size} ) bytes"
 
   if ${LOCAL_BACKUP}; then
@@ -135,17 +127,17 @@ do_backup() { # create ram-root backup
   fi
   do_logger "Notice: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
 
-  [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size is too big"
+  [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
 
   local name="${share}/${BACKUP_FILE}.gz"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  [[ "${VERBOSE}" == "Y" && "${BACKGROUND_BACKUP}" != "Y" ]] && which pv >/dev/null && local pv_cmd="pv -s ${backup_size} | "
+  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && which pv >/dev/null && local pv_cmd="pv -s ${backup_size} | "
 
   ${LOCAL_BACKUP} \
     && local cmd="nice -n 19 ${tar_cmd} | ${pv_cmd}cat > ${name}" \
     || local cmd="nice -n 19 ${tar_cmd} | ${pv_cmd}${SSH_CMD} \"${mv_cmd}; cat > ${name}\""
 
-  if [[ "${BACKGROUND_BACKUP}" == "Y" ]]; then
+  if ${BACKGROUND_BACKUP}; then
     do_logger "Info: running in background"
     eval "${cmd} &"
     do_pidmsg $! "${SERVER}:${name}" &
@@ -169,12 +161,11 @@ do_restore() { # restore ram-root backup
 
       if ${backupExist}; then
         do_logger "Info: restoring backup file '${name}'"
-        [[ "${VERBOSE}" == "Y" ]] && start_progress
+        ${VERBOSE} && start_progress
         ${LOCAL_BACKUP} \
           && eval "do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}" \
           || eval "do_exec ${SSH_CMD} \"gzip -dc ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -f -"
-#          || eval "do_exec ${SSH_CMD} \"pv -q ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -z -f -"
-        [[ "${VERBOSE}" == "Y" ]] && kill_progress
+        ${VERBOSE} && kill_progress
       else
         do_logger "Notice: backup file '${name}' not found"
       fi
@@ -198,7 +189,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   while [[ ${secs} -gt 0 ]]
   do
     ssh -q ${SERVER}/${PORT} 'exit 0' 2>\dev\null & return 0
-    [ "${VERBOSE}" == "Y" ] && printf "\a\r%2d" ${secs}
+    ${VERBOSE} && printf "\a\r%2d" ${secs}
     secs=$(( ${secs}-1 ))
     sleep 1
   done
@@ -288,7 +279,7 @@ pre_proc() {
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
   do_pre_proc_packages
-  [[ "${BACKUP}" == "Y" ]] && do_restore
+  ${BACKUP} && do_restore
   sync
 } # pre_proc
 
@@ -296,7 +287,7 @@ pre_proc() {
 #     POST INSTALL PROCEDURE      #
 ###################################
 post_proc() {
-  [ "${VERBOSE}" == "Y" ] && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
+  ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
 
   do_exec /etc/init.d/network restart
   do_chkconnection ${NETWORK_WAIT_TIME}
@@ -350,7 +341,7 @@ post_proc() {
 
   echo "PIVOT" > /tmp/ram-root-active
 
-  [[ "${BACKUP}" == "Y" && "${OPT}" == "init" ]] && do_backup # 1st backup
+  [[ ${BACKUP} && "${OPT}" == "init" ]] && do_backup # 1st backup
 
   sync
 } # post_proc
@@ -365,7 +356,7 @@ post_proc() {
 
 [[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
 
-OPT=${1}
+OPT=$(__lowercase ${1})
 
 OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
@@ -374,9 +365,9 @@ CONFIG_NAME="ram-root.cfg"
 [[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/${CONFIG_NAME}' not exist"; exit 1; }
 source ${RAM_ROOT}/${CONFIG_NAME}
 
-[[ "${DEBUG}" == "Y" ]] && set -xv
+${DEBUG} && set -xv
+${INTERACTIVE_UPGRADE} && INTERACTIVE="-i"
 eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
-[[ "${INTERACTIVE_UPGRADE}" == "Y" ]] && INTERACTIVE="-i"
 
 if [[ ! -f /tmp/ram-root-active ]]; then
   [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
@@ -404,7 +395,7 @@ SERVER_SHARE="${SERVER}:${SHARE}"
 NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
 BACKUP_FILE="${BUILD_ID}.tar"
-SSH_CMD="ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
@@ -412,7 +403,7 @@ SSH_CMD="ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
 [[ -z "${PS1}" ]] && VERBOSE="N"
 [[ "${OPT}" == "init" && -n "${PS1}" ]] && VERBOSE="Y"
 
-if [[ "${VERBOSE}" == "Y" ]]; then
+if ${VERBOSE}; then
   type print_progress >/dev/null || source /ram-root/functions/printprogress.sh
   STDERR="-s"
 fi
@@ -432,7 +423,7 @@ case ${OPT} in
 
   backup|stop)
     [[ -f /tmp/ram-root-active ]] || { do_logger "Info: 'ram-root' not running"; exit 1; }
-    [[ "${BACKUP}" == "Y" ]] || do_logger "Info: backup option is not selected" && {
+    ${BACKUP} || do_logger "Info: backup option is not selected" && {
       if do_chkconnection 60 "N"; then
         do_backup
         sync
@@ -462,7 +453,7 @@ do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERL
 do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
-do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
+do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT} # this is the magic
 for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
 do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
 
@@ -470,5 +461,6 @@ post_proc
 
 do_logger "Info: ram-root successful"
 __beep
+cd /
 
 exit 0

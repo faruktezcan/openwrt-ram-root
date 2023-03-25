@@ -1,4 +1,7 @@
 #!/bin/ash
+
+#set -u
+
 #set -xv # debug
 
 # Performs ext-root from ram drive as PIVOT root
@@ -111,9 +114,10 @@ do_backup() { # create ram-root backup
   do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
 
   do_logger "Info: calculating backup size"
-  ${VERBOSE} && start_progress
-  local backup_size=$( ${tar_cmd} | wc -c )
-  ${VERBOSE} && kill_progress
+  local pv_cmd=""
+  ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd="pv -tb |" || start_progress; }
+  local backup_size=$( eval "${tar_cmd} | ${pv_cmd} wc -c" )
+  ${VERBOSE} && { ${PV_INSTALLED} || kill_progress; }
   do_logger "Notice: backup size = $( __printf ${backup_size} ) bytes"
 
   if ${LOCAL_BACKUP}; then
@@ -130,7 +134,8 @@ do_backup() { # create ram-root backup
 
   local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && which pv >/dev/null && local pv_cmd="pv -s ${backup_size} |"
+  pv_cmd=""
+  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && ${PV_INSTALLED} && pv_cmd="pv -s ${backup_size} |"
 
   ${LOCAL_BACKUP} \
     && local cmd="${tar_cmd} | ${pv_cmd} cat > ${name}" \
@@ -141,6 +146,7 @@ do_backup() { # create ram-root backup
     eval "${cmd}" &
     do_pidmsg $! "${SERVER}:${name}" &
   else
+    do_logger "Info: sending backup file"
     eval "${cmd}"
     do_logger "Info: created in ${SERVER}:${name}"
   fi # BACKGROUND_BACKUP
@@ -186,7 +192,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   do_logger "Info: verifying connection to '${SERVER}' port '${PORT}'"
   while [[ ${secs} -gt 0 ]]
   do
-    ssh -q ${SERVER}/${PORT} 'exit 0' 2>\dev\null & return 0
+    ${SSH_CMD} 'exit 0' 2>\dev\null & return 0
     ${VERBOSE} && printf "\a\r%2d" ${secs}
     secs=$(( ${secs}-1 ))
     sleep 1
@@ -388,6 +394,9 @@ NEW_OVERLAY="/tmp/overlay"
 BACKUP_FILE="${BUILD_ID}.tar.gz"
 SSH_CMD="nice -n 19 ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
+
+PV_INSTALLED=false
+which pv >/dev/null && PV_INSTALLED=true
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"

@@ -107,7 +107,6 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
 
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
-  local file="/tmp/ram-root.backup"
   local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - ."
 
   local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
@@ -135,7 +134,7 @@ do_backup() { # create ram-root backup
   local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
   pv_cmd=""
-  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && ${PV_INSTALLED} && pv_cmd="pv -s ${backup_size} |"
+  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && ${PV_INSTALLED} && pv_cmd="pv -eps ${backup_size} |"
 
   ${LOCAL_BACKUP} \
     && local cmd="${tar_cmd} | ${pv_cmd} cat > ${name}" \
@@ -219,10 +218,11 @@ do_init() { # server setup
   for key_type in ${key_types}
   do
     local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
-    [[ -f ${key_file} ]] || do_exec dropbearkey -t ${key_type} -f ${key_file}
-    do_mklink ${key_file} /root/.ssh/id_${key_type}
-    do_mklink ${key_file} /root/.ssh/id_dropbear
-
+    [[ -f ${key_file} ]] || {
+      do_exec dropbearkey -t ${key_type} -f ${key_file}
+      do_mklink ${key_file} /root/.ssh/id_${key_type}
+      #do_mklink ${key_file} /root/.ssh/id_dropbear
+    }
     local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
     local name=$(echo ${key} | awk '{print $3}')
     local cmd="mkdir -p ${SHARE}; \
@@ -244,13 +244,14 @@ do_pre_proc_packages() { # install non-backable, non-preserved packages after re
   [[ -z "${PACKAGES}" ]] && return 0
 
   do_exec mkdir -p ${NEW_OVERLAY}/lower
-  do_logger "Info: installing package(s) -> ${PACKAGES}"
+  mkdir -p ${NEW_OVERLAY}/lower/usr/lib/opkg
+  tar -C /usr/lib/opkg -cf - . | tar -C ${NEW_OVERLAY}/lower/usr/lib/opkg -xf -
   LOWER_NAME="${NEW_OVERLAY}/lower:"
-
   cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
   echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
   do_update_repositories
-  for name in ${PACKAGES}; do ${name} "/tmp/opkg_ram-root.conf" "ram-root"; done
+  do_logger "Info: installing package(s) -> ${PACKAGES}"
+  for name in ${PACKAGES}; do do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"; done
   rm -f /tmp/opkg_ram-root.conf
 }
 
@@ -340,13 +341,12 @@ post_proc() {
 
   echo "PIVOT" > /tmp/ram-root-active
 
-  ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
-  do_exec /etc/init.d/network restart
-  do_chkconnection ${NETWORK_WAIT_TIME}
+ # ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
+ # do_exec /etc/init.d/network restart
+ # do_chkconnection ${NETWORK_WAIT_TIME}
 
   [[ ${BACKUP} && "${OPT}" == "init" ]] && do_backup # 1st backup
 
-  sync
 } # post_proc
 
 ###################################
@@ -363,21 +363,31 @@ OPT=$(__lowercase ${1})
 
 OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
+NEW_ROOT="/tmp/root"
+NEW_OVERLAY="/tmp/overlay"
 
 CONFIG_NAME="ram-root.cfg"
 [[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/${CONFIG_NAME}' not exist"; exit 1; }
 source ${RAM_ROOT}/${CONFIG_NAME}
 
 ${DEBUG} && set -xv
+
 ${INTERACTIVE_UPGRADE} && INTERACTIVE="-i"
 
 if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
-  do_logger "Info: previous attempt was not successful. Disabling auto-run"
+  do_logger "Info: previous attempt was not successful"
   do_logger "      fix the problem & run 'rm /tmp/ram-root.failsafe' command to continue"
   [[ -z "${PS1}" ]] && exit 1
+
   type ask_bool >/dev/null || source /ram-root/functions/askbool.sh
-  ask_bool ${INTERACTIVE} -t 5 -d N "\a\nDo you want to remove it now" && do_rm /tmp/ram-root.failsafe
+  ask_bool ${INTERACTIVE} -t 5 -d N "\a\nDo you want to remove it now" && {
+    if umount ${NEW_OVERLAY} >/dev/null; then
+      do_rm /tmp/ram-root.failsafe
+    else
+      do_logger "Error: removing 'ram-root' files was unsuccesful. Please reboot"
+    fi
+  }
   exit 1
 fi
 
@@ -389,14 +399,12 @@ SHARE="${SHARE}/${HOSTNAME}"
 LOCAL_BACKUP_SHARE="${SHARE}"
 [[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 SERVER_SHARE="${SERVER}:${SHARE}"
-NEW_ROOT="/tmp/root"
-NEW_OVERLAY="/tmp/overlay"
 BACKUP_FILE="${BUILD_ID}.tar.gz"
 SSH_CMD="nice -n 19 ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
 
-PV_INSTALLED=false
-which pv >/dev/null && PV_INSTALLED=true
+
+which pv >/dev/null && PV_INSTALLED=true || PV_INSTALLED=false
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"

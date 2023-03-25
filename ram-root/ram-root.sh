@@ -53,7 +53,7 @@ __beep() {
 
 do_exec() { # <command> execute command(s)
   local cmd="${@}"
-  do_logger "Info: executing '${cmd}'"
+  do_logger "Info: executing < ${cmd} >"
   eval "${cmd}" || do_error "Error: command failed. Return code: $?"
 }
 
@@ -94,8 +94,7 @@ do_rm() { # remove dir or file(s)
 }
 
 do_mklink() { # make symlink $1-file/dir $2-destination
-  [[ -L ${2} ]] && do_rm ${2}
-  do_exec ln -sf ${1} ${2}
+  [[ -L ${2} ]] || do_exec ln -sf ${1} ${2}
 }
 
 do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
@@ -106,7 +105,7 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
   local file="/tmp/ram-root.backup"
-  local tar_cmd="tar -C ${dir} ${EXCL} ${INCL} -c -z -f - ."
+  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - ."
 
   local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
   do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
@@ -129,17 +128,17 @@ do_backup() { # create ram-root backup
 
   [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
 
-  local name="${share}/${BACKUP_FILE}.gz"
+  local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && which pv >/dev/null && local pv_cmd="pv -s ${backup_size} | "
+  ${VERBOSE} && ! ${BACKGROUND_BACKUP} && which pv >/dev/null && local pv_cmd="pv -s ${backup_size} |"
 
   ${LOCAL_BACKUP} \
-    && local cmd="nice -n 19 ${tar_cmd} | ${pv_cmd}cat > ${name}" \
-    || local cmd="nice -n 19 ${tar_cmd} | ${pv_cmd}${SSH_CMD} \"${mv_cmd}; cat > ${name}\""
+    && local cmd="${tar_cmd} | ${pv_cmd} cat > ${name}" \
+    || local cmd="${tar_cmd} | ${pv_cmd} ${SSH_CMD} \"${mv_cmd}; cat > ${name}\""
 
   if ${BACKGROUND_BACKUP}; then
     do_logger "Info: running in background"
-    eval "${cmd} &"
+    eval "${cmd}" &
     do_pidmsg $! "${SERVER}:${name}" &
   else
     eval "${cmd}"
@@ -148,7 +147,8 @@ do_backup() { # create ram-root backup
 }
 
 do_restore() { # restore ram-root backup
-  local name="${SHARE}/${BACKUP_FILE}.gz"
+  local name="${SHARE}/${BACKUP_FILE}"
+  local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -x -z -f"
 
   case ${OPT} in
     start)
@@ -158,11 +158,11 @@ do_restore() { # restore ram-root backup
         || { ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true; }
 
       if ${backupExist}; then
-        do_logger "Info: restoring backup file '${name}'"
+        do_logger "Info: restoring file '${name}' from ${SERVER}"
         ${VERBOSE} && start_progress
         ${LOCAL_BACKUP} \
-          && eval "do_exec tar -C ${NEW_OVERLAY}/upper/ -x -z -f ${name}" \
-          || eval "do_exec ${SSH_CMD} \"gzip -dc ${name}\" | tar -C ${NEW_OVERLAY}/upper/ -x -f -"
+          && eval "${tar_cmd} ${name}" \
+          || eval "nice -n 19 ${SSH_CMD} \"gzip -dc ${name}\" | ${tar_cmd} -"
         ${VERBOSE} && kill_progress
       else
         do_logger "Notice: backup file '${name}' not found"
@@ -285,11 +285,6 @@ pre_proc() {
 #     POST INSTALL PROCEDURE      #
 ###################################
 post_proc() {
-  ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
-
-  do_exec /etc/init.d/network restart
-  do_chkconnection ${NETWORK_WAIT_TIME}
-
   local message_diplayed=false
   ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
@@ -339,11 +334,12 @@ post_proc() {
 
   echo "PIVOT" > /tmp/ram-root-active
 
-  if [[ ${BACKUP} && "${OPT}" == "init" ]]; then
-    if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
-      do_backup # 1st backup
-    fi 
-  fi
+  ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
+  do_exec /etc/init.d/network restart
+  do_chkconnection ${NETWORK_WAIT_TIME}
+
+  [[ ${BACKUP} && "${OPT}" == "init" ]] && do_backup # 1st backup
+
   sync
 } # post_proc
 
@@ -368,7 +364,7 @@ source ${RAM_ROOT}/${CONFIG_NAME}
 
 ${DEBUG} && set -xv
 ${INTERACTIVE_UPGRADE} && INTERACTIVE="-i"
-eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
+
 if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
   do_logger "Info: previous attempt was not successful. Disabling auto-run"
@@ -379,6 +375,7 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
   exit 1
 fi
 
+eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
 SYSTEM_IP=$(ifconfig br-lan | grep "inet addr" | cut -f2 -d':' | cut -f1 -d' ')
 LOCAL_BACKUP=false
 [[ $(__occurs "$(__lowercase ${HOSTNAME}) ${SYSTEM_IP} localhost 127.0.0.1" $(__lowercase ${SERVER}) ) -gt 0 ]] && { SERVER=${SYSTEM_IP}; LOCAL_BACKUP=true; }
@@ -388,8 +385,8 @@ LOCAL_BACKUP_SHARE="${SHARE}"
 SERVER_SHARE="${SERVER}:${SHARE}"
 NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
-BACKUP_FILE="${BUILD_ID}.tar"
-SSH_CMD="ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
+BACKUP_FILE="${BUILD_ID}.tar.gz"
+SSH_CMD="nice -n 19 ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
@@ -426,7 +423,7 @@ case ${OPT} in
     ${BACKUP} || do_logger "Info: backup option is not selected" && {
       if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
         do_backup
-        __beep    
+        __beep
         sync
         [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
         exit 0
@@ -454,7 +451,7 @@ do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERL
 do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
 do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
-do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT} # this is the magic
+do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
 for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
 do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
 

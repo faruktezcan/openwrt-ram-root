@@ -107,6 +107,10 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
 }
 
 do_backup() { # create ram-root backup
+  ${BACKUP} || { do_logger "Info: backup option not defined in config file"; exit 1; }
+
+  do_chkconnection
+
   local dir="/overlay/upper/"
   local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
 
@@ -153,6 +157,8 @@ do_backup() { # create ram-root backup
 }
 
 do_restore() { # restore ram-root backup
+  do_chkconnection
+
   local name="${SHARE}/${BACKUP_FILE}"
   local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -xf"
 
@@ -458,32 +464,30 @@ case ${OPT} in
     do_init
     pre_proc
     do_pivot
-    ${BACKUP} && do_backup
-    ;;
-
-  backup)
-    ${BACKUP} || { do_logger "Info: backup option not defined in config file"; exit 1; }
-    if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
+    if ${BACKUP}; then
+      do_logger "Info: creating 1st backup"
       do_backup
-    else
-      do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
-      exit 1
     fi
     ;;
 
+  backup)
+    do_backup
+    ;;
+
   stop)
+    type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
+    ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
     if ${BACKUP}; then
-      if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
-        do_backup
-      else
-        do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
-      fi
+      ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m" && do_backup
     fi
     do_error "Rebooting" 10
     ;;
 
   upgrade)
-    ${RAM_ROOT}/tools/opkgupgrade.sh -i
+    type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
+    ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
+    ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
+    ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
     ;;
 
   *)

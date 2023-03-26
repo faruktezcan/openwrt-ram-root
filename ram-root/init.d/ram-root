@@ -1,37 +1,21 @@
 #!/bin/sh /etc/rc.common
 EXTRA_COMMANDS="backup reset status upgrade alias"
-EXTRA_HELP="        backup  Create backup of ram-root
-        reset   Reset backup of ram-root
-        status  Show ram-root status
-        upgrade Run 'opkg upgrade' command"
+EXTRA_HELP="        backup  	Create ram-root backup
+        reset   	Reset backup of ram-root
+        status  	Show ram-root status
+        upgrade 	Run 'opkg upgrade' command"
 
 START=99
 STOP=33
 
 start() {
-	[ ! -e /tmp/ram-root-active ] && {
-		[ "$HOME" == "/" ] || echo "Starting ram-root"
-		/ram-root/ram-root.sh start
-		exit 0
-	}
-	logger "ram-root already running"
-	[ "$HOME" == "/" ] || echo -e "\aram-root already running"
-	exit 1
+	/ram-root/ram-root.sh start
+	exit 0
 }
 
 stop() {
-	[ -e /tmp/ram-root-active ] && {
-		type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
-		ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-		ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup first before rebooting\e[0m" && /ram-root/ram-root.sh backup
-		[ "$HOME" == "/" ] || echo -e "\aStopping ram-root & rebooting"
-		sync
-		sleep 3
-		reboot -f
-	}
-	logger "ram-root not running"
-	[ "$HOME" == "/" ] || echo -e "\aram-root not running"
-	exit 1
+	/ram-root/ram-root.sh stop
+	exit 0
 }
 
 restart() {
@@ -43,24 +27,13 @@ reload () {
 }
 
 backup() {
-	[ -e /tmp/ram-root-active ] && {
-		/ram-root/ram-root.sh backup
-		exit 0
-	}
-	logger "ram-root not running"
-	[ "$HOME" == "/" ] || echo -e "\aram-root not running"
-	exit 1
+	/ram-root/ram-root.sh backup
+	exit 0
 }
 
 reset() {
-	[ ! -e /tmp/ram-root-active ] && {
-		[ "$HOME" == "/" ] || echo "Resetting ram-root backup"
-		/ram-root/ram-root.sh reset
-		exit 0
-	}
-	logger "ram-root should NOT be running"
-	[ "$HOME" == "/" ] || echo -e "\aram-root should not be running"
-	exit 1
+	/ram-root/ram-root.sh reset
+	exit 0
 }
 
 status() {
@@ -69,16 +42,7 @@ status() {
 }
 
 upgrade() {
-	[ -e /tmp/ram-root-active ] && {
-		type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
-		ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-		. /ram-root/ram-root.cfg
-		[ "$INTERACTIVE_UPGRADE" == "Y" ] && interactive="-i"
-		/ram-root/tools/opkgupgrade.sh $interactive
-		[ "$HOME" == "/" ] || ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && /ram-root/ram-root.sh backup
-		exit 0
-	}
-	logger "ram-root not running"
-	[ "$HOME" == "/" ] || echo -e "\aram-root not running"
-	exit 1
+	/ram-root/ram-root.sh upgrade
+	exit 0
 }
+

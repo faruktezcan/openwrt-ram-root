@@ -10,12 +10,12 @@ STOP=33
 
 start() {
 	/ram-root/ram-root.sh start
-	exit 0
+	exit $?
 }
 
 stop() {
 	/ram-root/ram-root.sh stop
-	exit 0
+	exit $?
 }
 
 restart() {
@@ -28,12 +28,12 @@ reload () {
 
 backup() {
 	/ram-root/ram-root.sh backup
-	exit 0
+	exit $?
 }
 
 reset() {
 	/ram-root/ram-root.sh reset
-	exit 0
+	exit $?
 }
 
 status() {
@@ -43,6 +43,5 @@ status() {
 
 upgrade() {
 	/ram-root/ram-root.sh upgrade
-	exit 0
+	exit $?
 }
-

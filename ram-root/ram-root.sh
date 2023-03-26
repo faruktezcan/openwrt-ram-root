@@ -51,7 +51,7 @@ __printf() { # formatted numeric output
 }
 
 __beep() {
-  ${VERBOSE} && echo -e "\a"
+  ${VERBOSE} && echo -ne "\a"
 }
 
 do_exec() { # <command> execute command(s)
@@ -73,7 +73,8 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   do_logger "Error: stopping 'ram-root' process"
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
   ${VERBOSE} && {
-    echo -e "\aram-root: Notice: rebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
+    __beep
+    echo "ram-root: Notice: rebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
     do_countdown ${secs}
   }
   reboot &
@@ -348,6 +349,20 @@ post_proc() {
 
 } # post_proc
 
+do_pivot() {
+  do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
+  do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
+  do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
+  do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
+  do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
+  for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
+  do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
+
+  post_proc
+
+  do_logger "Info: ram-root successful"
+  __beep
+}
 ###################################
 #             MAIN                #
 ###################################
@@ -428,11 +443,13 @@ case ${OPT} in
   start)
     pre_proc
     ${BACKUP} && do_restore
+    do_pivot
     ;;
 
   reset)
     pre_proc
     do_logger "Info: bypassing backup file"
+    do_pivot
     ;;
 
   init)
@@ -440,18 +457,16 @@ case ${OPT} in
     for name in coreutils-sleep coreutils-sort coreutils-stty pv; do do_install ${name}; done
     do_init
     pre_proc
+    do_pivot
     ${BACKUP} && do_backup
     ;;
 
   backup)
-    ${BACKUP} || { do_logger "Info: backup option is not selected"; exit 1; }
+    ${BACKUP} || { do_logger "Info: backup option not defined in config file"; exit 1; }
     if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
       do_backup
-      __beep
-      exit 0
     else
       do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
-      __beep
       exit 1
     fi
     ;;
@@ -464,13 +479,11 @@ case ${OPT} in
         do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
       fi
     fi
-    __beep
     do_error "Rebooting" 10
     ;;
 
   upgrade)
     ${RAM_ROOT}/tools/opkgupgrade.sh -i
-    exit 0
     ;;
 
   *)
@@ -478,19 +491,5 @@ case ${OPT} in
     exit 1
     ;;
 esac
-
-do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
-do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
-do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
-do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
-do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
-for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
-do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
-
-post_proc
-
-do_logger "Info: ram-root successful"
-__beep
-cd /
 
 exit 0

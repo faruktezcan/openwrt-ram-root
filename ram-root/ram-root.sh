@@ -107,7 +107,7 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
 
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
-  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -c -z -f - ."
+  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
 
   local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
   do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
@@ -153,7 +153,7 @@ do_backup() { # create ram-root backup
 
 do_restore() { # restore ram-root backup
   local name="${SHARE}/${BACKUP_FILE}"
-  local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -x -z -f"
+  local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -xf"
 
   case ${OPT} in
     start)
@@ -164,10 +164,13 @@ do_restore() { # restore ram-root backup
 
       if ${backupExist}; then
         do_logger "Info: restoring file '${name}' from ${SERVER}"
-        ${VERBOSE} && start_progress
+
         ${LOCAL_BACKUP} \
-          && eval "${tar_cmd} ${name}" \
-          || eval "nice -n 19 ${SSH_CMD} \"gzip -dc ${name}\" | ${tar_cmd} -"
+          && local cmd="${tar_cmd} ${name}" \
+          || local cmd="${SSH_CMD} \"gzip -dc ${name}\" | ${tar_cmd} -"
+
+        ${VERBOSE} && start_progress
+        eval "${cmd}"
         ${VERBOSE} && kill_progress
       else
         do_logger "Notice: backup file '${name}' not found"
@@ -243,10 +246,10 @@ do_init() { # server setup
 do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
   [[ -z "${PACKAGES}" ]] && return 0
 
+  LOWER_NAME="${NEW_OVERLAY}/lower:"
   do_exec mkdir -p ${NEW_OVERLAY}/lower
   mkdir -p ${NEW_OVERLAY}/lower/usr/lib/opkg
   tar -C /usr/lib/opkg -cf - . | tar -C ${NEW_OVERLAY}/lower/usr/lib/opkg -xf -
-  LOWER_NAME="${NEW_OVERLAY}/lower:"
   cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
   echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
   do_update_repositories
@@ -284,8 +287,6 @@ pre_proc() {
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
   do_pre_proc_packages
-  ${BACKUP} && do_restore
-  sync
 } # pre_proc
 
 ###################################
@@ -344,8 +345,6 @@ post_proc() {
  # ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
  # do_exec /etc/init.d/network restart
  # do_chkconnection ${NETWORK_WAIT_TIME}
-
-  [[ ${BACKUP} && "${OPT}" == "init" ]] && do_backup # 1st backup
 
 } # post_proc
 
@@ -426,29 +425,47 @@ fi
 [[ -d ${NEW_OVERLAY} ]] && if ! rmdir ${NEW_OVERLAY} >/dev/null; then do_error "Error: could not remove '${NEW_OVERLAY}'"; fi
 
 case ${OPT} in
-  start|reset)
+  start)
+    pre_proc
+    ${BACKUP} && do_restore
+    ;;
+
+  reset)
+    pre_proc
+    do_logger "Info: bypassing backup file"
     ;;
 
   init)
     do_update_repositories
     for name in coreutils-sleep coreutils-sort coreutils-stty pv; do do_install ${name}; done
     do_init
+    pre_proc
+    ${BACKUP} && do_backup
     ;;
 
-  backup|stop)
-    [[ -f /tmp/ram-root-active ]] || { do_logger "Info: 'ram-root' not running"; exit 1; }
-    ${BACKUP} || do_logger "Info: backup option is not selected" && {
+  backup)
+    ${BACKUP} || { do_logger "Info: backup option is not selected"; exit 1; }
+    if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
+      do_backup
+      __beep
+      exit 0
+    else
+      do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
+      __beep
+      exit 1
+    fi
+    ;;
+
+  stop)
+    if ${BACKUP}; then
       if do_chkconnection ${NETWORK_WAIT_TIME} "N"; then
         do_backup
-        __beep
-        sync
-        [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
-        exit 0
+      else
+        do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
       fi
-      do_logger "Error: no response from server '${SERVER}' port '${PORT}'"
-    }
-    [[ "${OPT}" == "stop" ]] && do_error "Rebooting" 5
-    exit 1
+    fi
+    __beep
+    do_error "Rebooting" 10
     ;;
 
   upgrade)
@@ -461,8 +478,6 @@ case ${OPT} in
     exit 1
     ;;
 esac
-
-pre_proc
 
 do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
 do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}

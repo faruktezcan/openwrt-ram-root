@@ -69,7 +69,7 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   local name="/etc/rc.d/???ram-root"
   rm -f ${name} "${OLD_ROOT}${name}" # remove autostart
   sync
-  do_logger "${1}"
+  [[ "${{1}" != " " ]] && do_logger "${1}"
   do_logger "Error: stopping 'ram-root' process"
   [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
   ${VERBOSE} && {
@@ -342,7 +342,7 @@ post_proc() {
     done
   }
 
-  [[ -f ${RCLOCAL_FILE} ]] && do_exec sh ${RCLOCAL_FILE}
+  [[ -f ${RC_LOCAL_FILE} ]] && do_exec sh ${RC_LOCAL_FILE}
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
   do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
@@ -454,7 +454,7 @@ case ${OPT} in
 
   reset)
     pre_proc
-    do_logger "Info: bypassing backup file"
+    ${BACKUP} && do_logger "Info: bypassing backup file"
     do_pivot
     ;;
 
@@ -480,7 +480,7 @@ case ${OPT} in
     if ${BACKUP}; then
       ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m" && do_backup
     fi
-    do_error "Rebooting" 10
+    do_error " " 5
     ;;
 
   upgrade)

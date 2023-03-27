@@ -1,13 +1,10 @@
 #!/bin/ash
 
-#set -u
-
-#set -xv # debug
-
 # Performs ext-root from ram drive as PIVOT root
 # By Faruk Tezcan  'tezcan.faruk@gmail.com'
 
-
+#set -u
+#set -xv # debug
 
 __list_contains() { # return 0 if $1 contains $2; otherwise return 1
   [[ "${1%% ${2} *}" == "${1}" ]] && return 1
@@ -65,26 +62,27 @@ do_logger() { # <msg> $1-log messssage
 }
 
 do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
+  [[ "${1}" != " " ]] && do_logger "${1}"
+  do_logger "Error: stopping 'ram-root' process"
+  [[ $(__occurs "backup upgrade" ${OPT}) -gt 0 ]] && exit 1
+
   local secs=${2:-30}
   local name="/etc/rc.d/???ram-root"
-  rm -f ${name} "${OLD_ROOT}${name}" # remove autostart
-  sync
-  [[ "${{1}" != " " ]] && do_logger "${1}"
-  do_logger "Error: stopping 'ram-root' process"
-  [[ $(__occurs "init backup" ${OPT}) -gt 0 ]] && exit 1
+
   ${VERBOSE} && {
-    __beep
     echo "ram-root: Notice: rebooting in $secs seconds\nPress 'Ctrl+C' to cancel"
     do_countdown ${secs}
   }
   reboot &
   sleep 30
+  __beep
   reboot -f &
   exit 1
 }
 
 do_countdown() { # <seconds> $1-seconds(default=60)
   local secs=${1:-60}
+
   while [ ${secs} -gt 0 ]
   do
     printf "\a\r%2d" ${secs}
@@ -101,16 +99,12 @@ do_mklink() { # make symlink $1-file/dir $2-destination
   [[ -L ${2} ]] || do_exec ln -sf ${1} ${2}
 }
 
-do_pidmsg() { # wait until given pid job is completed $1-pid#  2-backup name
+do_pidmsg() { # wait until given pid job is completed $1-pid#  2-message
   while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
-  do_logger "Info: backup created in ${2}"
+  do_logger "${2}"
 }
 
 do_backup() { # create ram-root backup
-  ${BACKUP} || { do_logger "Info: backup option not defined in config file"; exit 1; }
-
-  do_chkconnection
-
   local dir="/overlay/upper/"
   local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
 
@@ -148,17 +142,15 @@ do_backup() { # create ram-root backup
   if ${BACKGROUND_BACKUP}; then
     do_logger "Info: running in background"
     eval "${cmd}" &
-    do_pidmsg $! "${SERVER}:${name}" &
+    do_pidmsg $! "Info: backup created in ${SERVER}:${name}" &
   else
     do_logger "Info: sending backup file"
     eval "${cmd}"
-    do_logger "Info: created in ${SERVER}:${name}"
-  fi # BACKGROUND_BACKUP
-}
+    do_logger "Info: backup created in ${SERVER}:${name}"
+  fi
+} # do_backup
 
 do_restore() { # restore ram-root backup
-  do_chkconnection
-
   local name="${SHARE}/${BACKUP_FILE}"
   local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -xf"
 
@@ -188,7 +180,7 @@ do_restore() { # restore ram-root backup
       do_logger "Info: bypassing backup file '${name}'"
       ;;
   esac
-}
+} # do_restore
 
 do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_error (default Y)
   __wait_for_network
@@ -201,7 +193,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   do_logger "Info: verifying connection to '${SERVER}' port '${PORT}'"
   while [[ ${secs} -gt 0 ]]
   do
-    ${SSH_CMD} 'exit 0' 2>\dev\null & return 0
+    ${SSH_CMD} 'exit 0' 2>/dev/null & return 0
     ${VERBOSE} && printf "\a\r%2d" ${secs}
     secs=$(( ${secs}-1 ))
     sleep 1
@@ -210,7 +202,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   [[ "${err}" == "Y" ]] && do_error "${msg}"
   do_logger ${msg}
   return 1
-}
+} # do_chkconnection
 
 do_init() { # server setup
   if ${LOCAL_BACKUP}; then
@@ -248,22 +240,7 @@ do_init() { # server setup
   touch ${name}
   sed -i '/^$/d; /shell_prompt/d' ${name}
   echo -e "\n. /ram-root/shell_prompt\n" >> ${name}
-}
-
-do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
-  [[ -z "${PACKAGES}" ]] && return 0
-
-  LOWER_NAME="${NEW_OVERLAY}/lower:"
-  do_exec mkdir -p ${NEW_OVERLAY}/lower
-  mkdir -p ${NEW_OVERLAY}/lower/usr/lib/opkg
-  tar -C /usr/lib/opkg -cf - . | tar -C ${NEW_OVERLAY}/lower/usr/lib/opkg -xf -
-  cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
-  echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
-  do_update_repositories
-  do_logger "Info: installing package(s) -> ${PACKAGES}"
-  for name in ${PACKAGES}; do do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"; done
-  rm -f /tmp/opkg_ram-root.conf
-}
+} # do_init
 
 do_update_repositories() {
   type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
@@ -282,18 +259,33 @@ do_install() { # install a package $1-package nsme $2-config_file(default=/etc/o
   fi
 }
 
+do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
+  do_logger "Info: installing package(s) -> ${PACKAGES}"
+  LOWER_NAME="${NEW_OVERLAY}/lower:"
+  do_exec mkdir -p ${NEW_OVERLAY}/lower
+  mkdir -p ${NEW_OVERLAY}/lower/usr/lib/opkg
+  tar -C /usr/lib/opkg -cf - . | tar -C ${NEW_OVERLAY}/lower/usr/lib/opkg -xf -
+  cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
+  echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
+  do_update_repositories
+  for name in ${PACKAGES}
+  do
+    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
+  done
+  rm -f /tmp/opkg_ram-root.conf
+}
 
 ###################################
 #       PRE INSTALL PROCEDURE     #
 ###################################
 pre_proc() {
+  do_logger "Info: creating ram disk"
   do_rm /tmp/ram-root-active
   touch /tmp/ram-root.failsafe
-  do_logger "Info: creating ram disk"
   do_exec mkdir -p ${NEW_OVERLAY}
   do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
-  do_pre_proc_packages
+  [[ -n "${PACKAGES}" ]] && do_pre_proc_packages
 } # pre_proc
 
 ###################################
@@ -301,6 +293,7 @@ pre_proc() {
 ###################################
 post_proc() {
   local message_diplayed=false
+
   ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
   do
     [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
@@ -346,16 +339,10 @@ post_proc() {
   [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
   do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
-
   echo "PIVOT" > /tmp/ram-root-active
-
- # ${VERBOSE} && echo -e "\aram-root: Notice: re-connect to the router after ${NETWORK_WAIT_TIME} seconds if your console does not respond"
- # do_exec /etc/init.d/network restart
- # do_chkconnection ${NETWORK_WAIT_TIME}
-
 } # post_proc
 
-do_pivot() {
+do_pivot_root() {
   do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
   do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
@@ -363,24 +350,19 @@ do_pivot() {
   do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
   for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
   do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
+} # do_pivot_root
 
-  post_proc
+##################
+#      MAIN      #
+##################
 
-  do_logger "Info: ram-root successful"
-  __beep
-}
-###################################
-#             MAIN                #
-###################################
 #trap "exit 1" INT TERM
 #trap "kill 0" EXIT
 
 # BASE="${0##*}"
 
 [[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
-
 OPT=$(__lowercase ${1})
-
 OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
 NEW_ROOT="/tmp/root"
@@ -421,9 +403,7 @@ LOCAL_BACKUP_SHARE="${SHARE}"
 SERVER_SHARE="${SERVER}:${SHARE}"
 BACKUP_FILE="${BUILD_ID}.tar.gz"
 SSH_CMD="nice -n 19 ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
-#SCP_CMD="scp -q -p $(__identity_file) -P ${PORT}"
-
-
+#SCP_CMD="nice -n scp -q -p $(__identity_file) -P ${PORT}"
 which pv >/dev/null && PV_INSTALLED=true || PV_INSTALLED=false
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
@@ -436,58 +416,70 @@ if ${VERBOSE}; then
   STDERR="-s"
 fi
 
-if [[ ! -f /tmp/ram-root-active ]]; then
-  [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
-else
+if [[ -f /tmp/ram-root-active ]]; then
   [[ $(__occurs "init start reset" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' already running"; exit 1; }
+else
+  [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
 fi
 
-[[ -d ${NEW_ROOT}    ]] && if ! rmdir ${NEW_ROOT}    >/dev/null; then do_error "Error: could not remove '${NEW_ROOT}'"; fi
-[[ -d ${NEW_OVERLAY} ]] && if ! rmdir ${NEW_OVERLAY} >/dev/null; then do_error "Error: could not remove '${NEW_OVERLAY}'"; fi
+[[ -d ${NEW_ROOT} ]] && if ! rmdir ${NEW_ROOT}    >/dev/null; then do_error "Error: could not remove '${NEW_ROOT}', please reboot"; fi
+[[ -d ${NEW_OVERLAY} ]] && if ! rmdir ${NEW_OVERLAY} >/dev/null; then do_error "Error: could not remove '${NEW_OVERLAY}', please reboot"; fi
+
+do_chkconnection
 
 case ${OPT} in
   start)
     pre_proc
     ${BACKUP} && do_restore
-    do_pivot
+    do_pivot_root
+    post_proc
+    do_logger "Info: ram-root started"
     ;;
 
   reset)
     pre_proc
-    ${BACKUP} && do_logger "Info: bypassing backup file"
-    do_pivot
+    do_pivot_root
+    post_proc
+    cmd="Info: ram-root started"
+    ${BACKUP} && cmd="${cmd} - bypassed backup"
+    do_logger "${cmd}"
     ;;
 
   init)
     do_update_repositories
-    for name in coreutils-sleep coreutils-sort coreutils-stty pv; do do_install ${name}; done
+    for name in coreutils-sleep coreutils-sort coreutils-stty pv
+    do
+      do_install ${name}
+    done
     do_init
     pre_proc
-    do_pivot
-    if ${BACKUP}; then
-      do_logger "Info: creating 1st backup"
-      do_backup
-    fi
+    do_pivot_root
+    post_proc
+    ${BACKUP} && do_backup
+    do_logger "Info: ram-root started - first time"
     ;;
 
   backup)
+    ${BACKUP} || { do_error "Info: backup option not defined in config file"; exit 1; }
     do_backup
     ;;
 
   stop)
-    type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
-    ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-    if ${BACKUP}; then
-      ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m" && do_backup
-    fi
+    ${VERBOSE} && {
+      type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
+      ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
+      ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m" && do_backup
+    }
     do_error " " 5
     ;;
 
   upgrade)
-    type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
-    ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-    ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
-    ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
+    ${VERBOSE} && {
+      type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
+      ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
+      ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
+      ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
+    } || do_error "Error: cannot upgrade in background"
     ;;
 
   *)
@@ -495,5 +487,7 @@ case ${OPT} in
     exit 1
     ;;
 esac
+
+__beep
 
 exit 0

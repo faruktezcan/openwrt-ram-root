@@ -205,41 +205,44 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
 } # do_chkconnection
 
 do_init() { # server setup
-  if ${LOCAL_BACKUP}; then
-    mkdir -p ${SHARE}
-    return 0
-  fi
-
-  local key_types="rsa"
-  case ${VERSION} in
-    2*) key_types="rsa ed25519" ;;
-  esac
-
   do_logger "Info: setting up first time"
-
-  for key_type in ${key_types}
-  do
-    local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
-    [[ -f ${key_file} ]] || {
-      do_exec dropbearkey -t ${key_type} -f ${key_file}
-      do_mklink ${key_file} /root/.ssh/id_${key_type}
-      #do_mklink ${key_file} /root/.ssh/id_dropbear
-    }
-    local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
-    local name=$(echo ${key} | awk '{print $3}')
-    local cmd="mkdir -p ${SHARE}; \
-               touch /etc/dropbear/authorized_keys; \
-               sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
-               sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
-               echo ${key} >> /etc/dropbear/authorized_keys"
-    ${SSH_CMD} "${cmd}" || do_error "Error: server '${SERVER}' setup not completed. Return code: $?"
-  done
 
   do_mklink /ram-root/init.d/ram-root /etc/init.d
   name="/root/.profile"
   touch ${name}
   sed -i '/^$/d; /shell_prompt/d' ${name}
   echo -e "\n. /ram-root/shell_prompt\n" >> ${name}
+
+  if ${BACKUP}; then
+    if ${LOCAL_BACKUP}; then
+      mkdir -p ${SHARE}
+      return 0
+    else
+      local key_types="rsa"
+      case ${VERSION} in
+        2*) key_types="rsa ed25519" ;;
+      esac
+
+      for key_type in ${key_types}
+      do
+        local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
+        [[ -f ${key_file} ]] || {
+          do_exec dropbearkey -t ${key_type} -f ${key_file}
+          do_mklink ${key_file} /root/.ssh/id_${key_type}
+          #do_mklink ${key_file} /root/.ssh/id_dropbear
+        }
+        local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
+        local name=$(echo ${key} | awk '{print $3}')
+        local cmd="mkdir -p ${SHARE}; \
+                   touch /etc/dropbear/authorized_keys; \
+                   sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
+                   sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
+                   echo ${key} >> /etc/dropbear/authorized_keys"
+        ${SSH_CMD} "${cmd}" || do_error "Error: server '${SERVER}' setup not completed. Return code: $?"
+      done
+    fi
+  fi
+  return 0
 } # do_init
 
 do_update_repositories() {
@@ -248,31 +251,63 @@ do_update_repositories() {
 }
 
 do_install() { # install a package $1-package nsme $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
-  if [[ -n "${name}" ]]; then
-    local name=${1}
-    local conf_file=${2:-"/etc/opkg.conf"}
-    local dest_name=${3:-"root"}
+  [[ -z "${name}" ]] && return 1
 
-    [[ -n "$(opkg status ${name})" ]] && { do_logger "Notice: '${name}' already installed"; return; }
-    [[ -z "$(opkg find ${name})" ]] && do_error "Error: '${name}' not found"
-    do_exec opkg install -f ${conf_file} -d ${dest_name} ${name}
-  fi
+  local name=${1}
+  local conf_file=${2:-"/etc/opkg.conf"}
+  local dest_name=${3:-"root"}
+
+  [[ -n "$(opkg status ${name})" ]] && { do_logger "Notice: '${name}' already installed"; return 1; }
+  [[ -z "$(opkg find ${name})" ]] && do_error "Error: '${name}' not found"
+  do_exec opkg install -f ${conf_file} -d ${dest_name} ${name}
+  return 0
 }
 
 do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
-  do_logger "Info: installing package(s) -> ${PACKAGES}"
-  LOWER_NAME="${NEW_OVERLAY}/lower:"
-  do_exec mkdir -p ${NEW_OVERLAY}/lower
-  mkdir -p ${NEW_OVERLAY}/lower/usr/lib/opkg
-  tar -C /usr/lib/opkg -cf - . | tar -C ${NEW_OVERLAY}/lower/usr/lib/opkg -xf -
-  cp -f /etc/opkg.conf /tmp/opkg_ram-root.conf
-  echo "dest ram-root ${NEW_OVERLAY}/lower" >> /tmp/opkg_ram-root.conf
+
+cat << EOF > /tmp/pre_proc_pkgs.sh
+#!/bin/sh
+rm -f /tmp/pre_proc_pkgs.done
+rm -f /tmp/pre_proc_pkgs.fail
+opkg install ${PACKAGES} > /dev/null
+[ $? -eq 0 ] \
+  && touch /tmp/pre_proc_pkgs.done \
+  || touch /tmp/pre_proc_pkgs.fail
+exit 0
+EOF
+
+  chmod +x /tmp/pre_proc_pkgs.sh
+
+  local lower_dir="${NEW_OVERLAY}/lower"
+  do_exec mkdir -p ${lower_dir} /tmp/pre_overlay/upper /tmp/pre_overlay/work
+
   do_update_repositories
-  for name in ${PACKAGES}
+  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=/tmp/pre_overlay/upper,workdir=/tmp/pre_overlay/work ram-root_pre ${lower_dir}
+  for dir in  /proc /dev /sys /tmp
   do
-    do_install ${name} "/tmp/opkg_ram-root.conf" "ram-root"
+    do_exec mount -o rbind ${dir} ${lower_dir}${dir}
   done
-  rm -f /tmp/opkg_ram-root.conf
+
+  do_logger "Info: installing package(s) -> ${PACKAGES}"
+  ${VERBOSE} && start_progress
+  chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
+  umount $( mount | grep ${lower_dir} | cut -f3 -d' '| sort -r)
+  mkdir -p ${lower_dir}
+  tar -c  -C /tmp/pre_overlay/upper/ -f - . | tar -x -C ${lower_dir} -f -
+  ${VERBOSE} && kill_progress
+
+  if [[ -f /tmp/pre_proc_pkgs.done ]]; then
+    LOWER_NAME="${lower_dir}:/"
+    local msg="Info: package(s) installed successfully"
+  else
+    LOWER_NAME="/"
+    local msg="Notice: installation was not successful"
+    do_rm ${lower_dir}
+  fi
+
+  do_rm /tmp/pre_*
+
+  do_logger "${msg}"
 }
 
 ###################################
@@ -343,7 +378,7 @@ post_proc() {
 } # post_proc
 
 do_pivot_root() {
-  do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
+  do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME},upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
   do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
@@ -428,23 +463,6 @@ fi
 do_chkconnection
 
 case ${OPT} in
-  start)
-    pre_proc
-    ${BACKUP} && do_restore
-    do_pivot_root
-    post_proc
-    do_logger "Info: ram-root started"
-    ;;
-
-  reset)
-    pre_proc
-    do_pivot_root
-    post_proc
-    cmd="Info: ram-root started"
-    ${BACKUP} && cmd="${cmd} - bypassed backup"
-    do_logger "${cmd}"
-    ;;
-
   init)
     do_update_repositories
     for name in coreutils-sleep coreutils-sort coreutils-stty pv
@@ -459,9 +477,12 @@ case ${OPT} in
     do_logger "Info: ram-root started - first time"
     ;;
 
-  backup)
-    ${BACKUP} || { do_error "Info: backup option not defined in config file"; exit 1; }
-    do_backup
+  start)
+    pre_proc
+    ${BACKUP} && do_restore
+    do_pivot_root
+    post_proc
+    do_logger "Info: ram-root started"
     ;;
 
   stop)
@@ -472,6 +493,21 @@ case ${OPT} in
     }
     do_error " " 5
     ;;
+
+  reset)
+    pre_proc
+    do_pivot_root
+    post_proc
+    cmd="Info: ram-root started"
+    ${BACKUP} && cmd="${cmd} - bypassed backup"
+    do_logger "${cmd}"
+    ;;
+
+  backup)
+    ${BACKUP} || { do_error "Info: backup option not defined in config file"; exit 1; }
+    do_backup
+    ;;
+
 
   upgrade)
     ${VERBOSE} && {

@@ -1,0 +1,32 @@
+#!/bin/sh
+
+zram_stat() {
+    local zdev="/sys/block/zram$1"
+
+    printf "\nStats info for zram device zram$1\n\n"
+
+    printf "ZRAM\n----\n"
+    printf "%-25s - %s\n" "Block device" $zdev
+    awk '{ printf "%-25s - %d MiB\n", "Device size", $1/1024/1024 }' <$zdev/disksize
+    printf "%-25s - %s\n" "Compression algo" "$(cat $zdev/comp_algorithm)"
+
+    awk 'BEGIN { fmt = "%-25s - %.2f %s\n"
+    fmt2 = "%-25s - %d\n"
+    print "\nDATA\n----" }
+    { printf fmt, "Original data size", $1/1024/1024, "MiB"
+    printf fmt, "Compressed data size", $2/1024/1024, "MiB"
+    printf fmt, "Compress ratio", $1/$2, ""
+    print "\nMEMORY\n------"
+    printf fmt, "Memory used, total", $3/1024/1024, "MiB"
+    printf fmt, "Allocator overhead", ($3-$2)/1024/1024, "MiB"
+    printf fmt, "Allocator efficiency", $2/$3*100, "%"
+    printf fmt, "Maximum memory ever used", $5/1024/1024, "MiB"
+    printf fmt, "Memory limit", $4/1024/1024, "MiB"
+    print "\nPAGES\n-----"
+    printf fmt2, "Same pages count", $6
+    printf fmt2, "Pages compacted", $7 }' <$zdev/mm_stat
+
+    awk '{ printf "%-25s - %d\n\n", "Free pages discarded", $4 }' <$zdev/io_stat
+}
+
+zram_stat $1

@@ -24,6 +24,7 @@ __occurs() { # check if $1 (separated with $3) contains $2 & return the # of occ
 __lowercase() { # converts $1 to lowercase & if $2 defined, set $2 as a variable with result
   local __resultvar=${2}
   local __result=$(echo "${1}" | awk '{print tolower($0)}')
+
   [[ "$__resultvar" ]] && eval $__resultvar="'$__result'" || echo -n "$__result"
 }
 
@@ -36,7 +37,7 @@ __wait_for_network() { # wait until local network is ready up to NETWORK_WAIT_TI
 }
 
 __printf() { # formatted numeric output
-  [[ -z "${1}" ]] && { echo "Empty value!"; return 1; }
+  [[ -z "${1}" ]] && { echo 0; return 1; }
 
   if [[ ${1} =~ ^[+-]?[0-9]+$ ]]; then # "Integer!"
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
@@ -45,14 +46,26 @@ __printf() { # formatted numeric output
   else # Mixed
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
   fi
+  return 0
 }
 
 __beep() {
   ${VERBOSE} && echo -ne "\a"
 }
 
+__total_ram() {
+  local line
+  while read -r line; do case "${line}" in MemTotal:*) set $line; echo $(( ${2} * 1024 )); break ;; esac; done </proc/meminfo
+}
+
+__free_ram() {
+  local line
+  while read -r line; do case "${line}" in MemAvailable:*) set $line; echo $(( ${2} * 1024 )); break ;; esac; done </proc/meminfo
+}
+
 do_exec() { # <command> execute command(s)
   local cmd="${@}"
+
   do_logger "Info: executing < ${cmd} >"
   eval "${cmd}" || do_error "Error: command failed. Return code: $?"
 }
@@ -83,10 +96,9 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
 do_countdown() { # <seconds> $1-seconds(default=60)
   local secs=${1:-60}
 
-  while [ ${secs} -gt 0 ]
-  do
+  while [ ${secs} -gt 0 ]; do
     printf "\a\r%2d" ${secs}
-    secs=$(( ${secs}-1 ))
+    secs=$((secs-1))
     sleep 1
   done
 }
@@ -108,8 +120,7 @@ do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
   local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
 
-  local free_memory=$( grep -i 'MemAvailable' /proc/meminfo | awk '{print $2*1024}' )
-  do_logger "Info: available memory = $( __printf ${free_memory} ) bytes"
+  do_logger "Info: available memory = $( __printf $(__free_ram) ) bytes"
 
   do_logger "Info: calculating backup size"
   local pv_cmd=""
@@ -153,33 +164,23 @@ do_backup() { # create ram-root backup
 do_restore() { # restore ram-root backup
   local name="${SHARE}/${BACKUP_FILE}"
   local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -xf"
+  local backupExist=false
 
-  case ${OPT} in
-    start)
-      local backupExist=false
-      ${LOCAL_BACKUP} \
-        && { [[ -f ${name} ]] && backupExist=true; } \
-        || { ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true; }
+  ${LOCAL_BACKUP} \
+  && { [[ -f ${name} ]] && backupExist=true; } \
+  || { ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true; }
 
-      if ${backupExist}; then
-        do_logger "Info: restoring file '${name}' from ${SERVER}"
-
-        ${LOCAL_BACKUP} \
-          && local cmd="${tar_cmd} ${name}" \
-          || local cmd="${SSH_CMD} \"gzip -dc ${name}\" | ${tar_cmd} -"
-
-        ${VERBOSE} && start_progress
-        eval "${cmd}"
-        ${VERBOSE} && kill_progress
-      else
-        do_logger "Notice: backup file '${name}' not found"
-      fi
-      ;;
-
-    reset)
-      do_logger "Info: bypassing backup file '${name}'"
-      ;;
-  esac
+  if ${backupExist}; then
+    do_logger "Info: restoring file '${name}' from ${SERVER}"
+    ${LOCAL_BACKUP} \
+      && local cmd="${tar_cmd} ${name}" \
+      || local cmd="${SSH_CMD} \"gzip -dc ${name}\" | ${tar_cmd} -"
+    ${VERBOSE} && start_progress
+    eval "${cmd}"
+    ${VERBOSE} && kill_progress
+  else
+    do_logger "Notice: backup file '${name}' not found"
+  fi
 } # do_restore
 
 do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_error (default Y)
@@ -191,16 +192,16 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   local err=${2:-Y}
 
   do_logger "Info: verifying connection to '${SERVER}' port '${PORT}'"
-  while [[ ${secs} -gt 0 ]]
-  do
+  while [[ ${secs} -gt 0 ]]; do
     ${SSH_CMD} 'exit 0' 2>/dev/null & return 0
     ${VERBOSE} && printf "\a\r%2d" ${secs}
-    secs=$(( ${secs}-1 ))
+    secs=$((secs-1))
     sleep 1
   done
+
   local msg="Error: connection lost to server '${SERVER}' port '${PORT}'"
   [[ "${err}" == "Y" ]] && do_error "${msg}"
-  do_logger ${msg}
+  do_logger "${msg}"
   return 1
 } # do_chkconnection
 
@@ -211,12 +212,11 @@ do_init() { # server setup
   name="/root/.profile"
   touch ${name}
   sed -i '/^$/d; /shell_prompt/d' ${name}
-  echo -e "\n. /ram-root/shell_prompt\n" >> ${name}
+  echo -e "\nsource /ram-root/shell_prompt\n" >> ${name}
 
   if ${BACKUP}; then
     if ${LOCAL_BACKUP}; then
       mkdir -p ${SHARE}
-      return 0
     else
       local key_types="rsa"
       case ${VERSION} in
@@ -242,7 +242,6 @@ do_init() { # server setup
       done
     fi
   fi
-  return 0
 } # do_init
 
 do_update_repositories() {
@@ -250,64 +249,58 @@ do_update_repositories() {
   opkg_update ${INTERACTIVE}; [[ $? -gt 0 ]] && do_error "Error: updating repository failed"
 }
 
-do_install() { # install a package $1-package nsme $2-config_file(default=/etc/opkg.conf) $3-destination(default=root)
+do_install() { # install a package $1-package nsme
+  local name=${1}
+
   [[ -z "${name}" ]] && return 1
 
-  local name=${1}
-  local conf_file=${2:-"/etc/opkg.conf"}
-  local dest_name=${3:-"root"}
-
   [[ -n "$(opkg status ${name})" ]] && { do_logger "Notice: '${name}' already installed"; return 1; }
-  [[ -z "$(opkg find ${name})" ]] && do_error "Error: '${name}' not found"
-  do_exec opkg install -f ${conf_file} -d ${dest_name} ${name}
+  [[ -z "$(opkg find ${name})" ]] && { do_error "Error: '${name}' not found"; return 1; }
+  do_exec opkg install ${name}
   return 0
 }
 
-do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
+do_create_chroot_cmd() {
+  local new_packages
 
-cat << EOF > /tmp/pre_proc_pkgs.sh
+  do_logger "Info: checking package(s) -> ${PACKAGES}"
+
+  for name in ${PACKAGES}; do
+    [[ -n "$(opkg status ${name})" ]] && { do_logger "Notice: '${name}' already installed"; continue; }
+    [[ -z "$(opkg find ${name})" ]] && { do_logger "Notice: '${name}' not found"; continue; }
+    new_packages="${new_packages} ${name}"
+  done
+
+  cat << EOF > /tmp/pre_proc_pkgs.sh
 #!/bin/sh
-rm -f /tmp/pre_proc_pkgs.done
-rm -f /tmp/pre_proc_pkgs.fail
-opkg install ${PACKAGES} > /dev/null
-[ $? -eq 0 ] \
-  && touch /tmp/pre_proc_pkgs.done \
-  || touch /tmp/pre_proc_pkgs.fail
+opkg install ${new_packages}
 exit 0
 EOF
 
   chmod +x /tmp/pre_proc_pkgs.sh
+}
 
+do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
   local lower_dir="${NEW_OVERLAY}/lower"
-  do_exec mkdir -p ${lower_dir} /tmp/pre_overlay/upper /tmp/pre_overlay/work
+  local pre_dir="${NEW_OVERLAY}/pre"
 
+  do_exec mkdir -p ${lower_dir} ${pre_dir}/upper ${pre_dir}/work
   do_update_repositories
-  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=/tmp/pre_overlay/upper,workdir=/tmp/pre_overlay/work ram-root_pre ${lower_dir}
-  for dir in  /proc /dev /sys /tmp
-  do
+  do_create_chroot_cmd
+
+  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${pre_dir}/upper,workdir=${pre_dir}/work ram-root_pre ${lower_dir}
+  for dir in /proc /dev /sys /tmp; do
     do_exec mount -o rbind ${dir} ${lower_dir}${dir}
   done
 
-  do_logger "Info: installing package(s) -> ${PACKAGES}"
-  ${VERBOSE} && start_progress
+#  ${VERBOSE} && start_progress
   chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
-  umount $( mount | grep ${lower_dir} | cut -f3 -d' '| sort -r)
+  umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r)
   mkdir -p ${lower_dir}
-  tar -c  -C /tmp/pre_overlay/upper/ -f - . | tar -x -C ${lower_dir} -f -
-  ${VERBOSE} && kill_progress
-
-  if [[ -f /tmp/pre_proc_pkgs.done ]]; then
-    LOWER_NAME="${lower_dir}:/"
-    local msg="Info: package(s) installed successfully"
-  else
-    LOWER_NAME="/"
-    local msg="Notice: installation was not successful"
-    do_rm ${lower_dir}
-  fi
-
-  do_rm /tmp/pre_*
-
-  do_logger "${msg}"
+  tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
+#  ${VERBOSE} && kill_progress
+  LOWER_NAME="${lower_dir}:"
+  do_rm ${pre_dir}
 }
 
 ###################################
@@ -318,67 +311,35 @@ pre_proc() {
   do_rm /tmp/ram-root-active
   touch /tmp/ram-root.failsafe
   do_exec mkdir -p ${NEW_OVERLAY}
-  do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs $NEW_OVERLAY
+
+  if [[ -f /sys/class/zram-control/hot_add ]]; then
+    ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
+
+    local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
+    [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
+    echo $zram_comp_algo > /sys/block/zram${ZRAM_ID}/comp_algorithm
+
+#    echo $(__total_ram) > /sys/block/zram${ZRAM_ID}/disksize
+    __total_ram > /sys/block/zram${ZRAM_ID}/disksize
+    if which mkfs.ext4 &>/dev/null; then
+      mkfs.ext4 -q -F -O ^has_journal /dev/zram${ZRAM_ID} &>/dev/null
+      [[ $? -eq 0 ]] && ZRAM_EXIST=true || echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove
+    fi
+  fi
+
+  ${ZRAM_EXIST} \
+    && do_exec mount -t ext4  -o rw,noatime,discard /dev/zram${ZRAM_ID} ${NEW_OVERLAY} \
+    || do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs ${NEW_OVERLAY}
+
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
   [[ -n "${PACKAGES}" ]] && do_pre_proc_packages
 } # pre_proc
 
-###################################
-#     POST INSTALL PROCEDURE      #
-###################################
-post_proc() {
-  local message_diplayed=false
-
-  ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read name
-  do
-    [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
-      ${message_diplayed} || { do_logger "Info: starting service(s) enabled in 'ram-root'"; message_diplayed=true; }
-      do_exec /etc/init.d/${name:3} start
-    }
-  done
-
-  message_diplayed=false
-  ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read name
-  do
-    [[ -f /etc/rc.d/${name} ]] || {
-      ${message_diplayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_diplayed=true; }
-      do_exec /etc/init.d/${name:3} stop
-    }
-  done
-
-  [[ -n "${START_SERVICES}" ]] && {
-    do_logger "Info: starting service(s) defined in '${CONFIG_NAME}'"
-    for name in ${START_SERVICES}
-    do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} start || do_logger "Notice: ${name} not found"
-    done
-  }
-
-  [[ -n "${RESTART_SERVICES}" ]] && {
-    do_logger "Info: re-starting service(s) defined in '${CONFIG_NAME}'"
-    for name in ${RESTART_SERVICES}
-    do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} restart || do_logger "Notice: ${name} not found"
-    done
-  }
-
-  [[ -n "${STOP_SERVICES}" ]] && {
-    do_logger "Info: stopping service(s) defined in ${CONFIG_NAME}'"
-    for name in ${STOP_SERVICES}
-    do
-      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} stop || do_logger "Notice: ${name} not found"
-    done
-  }
-
-  [[ -f ${RC_LOCAL_FILE} ]] && do_exec sh ${RC_LOCAL_FILE}
-  [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
-  do_mklink ${OLD_ROOT}${RAM_ROOT} /
-  echo "PIVOT" > /tmp/ram-root-active
-} # post_proc
-
+######################
+#     PIVOT_ROOT     #
+######################
 do_pivot_root() {
-  do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME},upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
+  do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
   do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
@@ -387,9 +348,70 @@ do_pivot_root() {
   do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
 } # do_pivot_root
 
+###################################
+#     POST INSTALL PROCEDURE      #
+###################################
+post_proc() {
+  local message_diplayed=false
+
+  ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
+    [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
+      ${message_diplayed} || { do_logger "Info: starting service(s) enabled in 'ram-root'"; message_diplayed=true; }
+      do_exec /etc/init.d/${name:3} start
+    }
+  done
+
+  message_diplayed=false
+  ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
+    [[ -f /etc/rc.d/${name} ]] || {
+      ${message_diplayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_diplayed=true; }
+      do_exec /etc/init.d/${name:3} stop
+    }
+  done
+
+  [[ -n "${START_SERVICES}" ]] && {
+    do_logger "Info: starting service(s) defined in '${CONFIG_NAME}'"
+    for name in ${START_SERVICES}; do
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} start || do_logger "Notice: ${name} not found"
+    done
+  }
+
+  [[ -n "${RESTART_SERVICES}" ]] && {
+    do_logger "Info: re-starting service(s) defined in '${CONFIG_NAME}'"
+    for name in ${RESTART_SERVICES}; do
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} restart || do_logger "Notice: ${name} not found"
+    done
+  }
+
+  [[ -n "${STOP_SERVICES}" ]] && {
+    do_logger "Info: stopping service(s) defined in ${CONFIG_NAME}'"
+    for name in ${STOP_SERVICES}; do
+      [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} stop || do_logger "Notice: ${name} not found"
+    done
+  }
+
+  [[ -f ${RC_LOCAL_FILE} ]] && do_exec sh ${RC_LOCAL_FILE}
+  [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
+  do_mklink ${OLD_ROOT}${RAM_ROOT} /
+
+  echo "PIVOT" > /tmp/ram-root-active
+
+  if ${ZRAM_EXIST}; then
+    echo 1 > /sys/block/zram${ZRAM_ID}/compact
+    if which fstrim &>/dev/null; then
+      fstrim /overlay
+    fi
+    ${VERBOSE} && zram-status ${ZRAM_ID}
+  fi
+
+} # post_proc
+
 ##################
 #      MAIN      #
 ##################
+
+#echo $(__total_ram)
 
 #trap "exit 1" INT TERM
 #trap "kill 0" EXIT
@@ -431,13 +453,13 @@ fi
 eval $(grep -e 'VERSION=\|BUILD_ID=' /usr/lib/os-release)
 SYSTEM_IP=$(ifconfig br-lan | grep "inet addr" | cut -f2 -d':' | cut -f1 -d' ')
 LOCAL_BACKUP=false
+ZRAM_EXIST=false
 [[ $(__occurs "$(__lowercase ${HOSTNAME}) ${SYSTEM_IP} localhost 127.0.0.1" $(__lowercase ${SERVER}) ) -gt 0 ]] && { SERVER=${SYSTEM_IP}; LOCAL_BACKUP=true; }
 SHARE="${SHARE}/${HOSTNAME}"
 LOCAL_BACKUP_SHARE="${SHARE}"
 [[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
-SERVER_SHARE="${SERVER}:${SHARE}"
 BACKUP_FILE="${BUILD_ID}.tar.gz"
-SSH_CMD="nice -n 19 ssh -qy $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="nice -n 19 ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="nice -n scp -q -p $(__identity_file) -P ${PORT}"
 which pv >/dev/null && PV_INSTALLED=true || PV_INSTALLED=false
 
@@ -460,10 +482,10 @@ fi
 [[ -d ${NEW_ROOT} ]] && if ! rmdir ${NEW_ROOT}    >/dev/null; then do_error "Error: could not remove '${NEW_ROOT}', please reboot"; fi
 [[ -d ${NEW_OVERLAY} ]] && if ! rmdir ${NEW_OVERLAY} >/dev/null; then do_error "Error: could not remove '${NEW_OVERLAY}', please reboot"; fi
 
-do_chkconnection
 
 case ${OPT} in
   init)
+    do_chkconnection
     do_update_repositories
     for name in coreutils-sleep coreutils-sort coreutils-stty pv
     do
@@ -478,6 +500,7 @@ case ${OPT} in
     ;;
 
   start)
+    do_chkconnection
     pre_proc
     ${BACKUP} && do_restore
     do_pivot_root
@@ -495,6 +518,7 @@ case ${OPT} in
     ;;
 
   reset)
+    do_chkconnection
     pre_proc
     do_pivot_root
     post_proc
@@ -505,12 +529,14 @@ case ${OPT} in
 
   backup)
     ${BACKUP} || { do_error "Info: backup option not defined in config file"; exit 1; }
+    do_chkconnection
     do_backup
     ;;
 
 
   upgrade)
     ${VERBOSE} && {
+      do_chkconnection
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
       ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}

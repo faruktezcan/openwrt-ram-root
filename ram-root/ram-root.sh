@@ -7,8 +7,7 @@
 #set -xv # debug
 
 __list_contains() { # return 0 if $1 contains $2; otherwise return 1
-  [[ "${1%% ${2} *}" == "${1}" ]] && return 1
-  return 0
+  [[ "${1%% ${2} *}" == "${1}" ]] && return 1 || return 0
 }
 
 #__list_contains() { # return 0 if $1 contains $2; otherwise return 1
@@ -61,6 +60,10 @@ __total_ram() {
 __free_ram() {
   local line
   while read -r line; do case "${line}" in MemAvailable:*) set $line; echo $(( ${2} * 1024 )); break ;; esac; done </proc/meminfo
+}
+
+__which() {
+  which "${1}" &>/dev/null && return 0 || return 1
 }
 
 do_exec() { # <command> execute command(s)
@@ -300,39 +303,37 @@ do_pre_proc_packages() { # install non-backable, non-preserved packages after re
   tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
 #  ${VERBOSE} && kill_progress
   LOWER_NAME="${lower_dir}:"
-  do_rm ${pre_dir}
+  do_rm ${pre_dir} /tmp/pre_proc_pkgs.sh
+
 }
 
 ###################################
 #       PRE INSTALL PROCEDURE     #
 ###################################
 pre_proc() {
-  do_logger "Info: creating ram disk"
   do_rm /tmp/ram-root-active
   touch /tmp/ram-root.failsafe
-  do_exec mkdir -p ${NEW_OVERLAY}
 
-  if [[ -f /sys/class/zram-control/hot_add ]]; then
+  do_logger "Info: creating ram disk"
+  do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}
+
+  if [[ -f /sys/class/zram-control/hot_add ]] && __which mkfs.ext4; then
     ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
-
     local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
     [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
     echo $zram_comp_algo > /sys/block/zram${ZRAM_ID}/comp_algorithm
-
-#    echo $(__total_ram) > /sys/block/zram${ZRAM_ID}/disksize
     __total_ram > /sys/block/zram${ZRAM_ID}/disksize
-    if which mkfs.ext4 &>/dev/null; then
-      mkfs.ext4 -q -F -O ^has_journal /dev/zram${ZRAM_ID} &>/dev/null
-      [[ $? -eq 0 ]] && ZRAM_EXIST=true || echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove
-    fi
+    mkfs.ext4 -O ^has_journal,fast_commit /dev/zram${ZRAM_ID} &>/dev/null \
+      && ZRAM_EXIST=true || echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove
   fi
 
   ${ZRAM_EXIST} \
-    && do_exec mount -t ext4  -o rw,noatime,discard /dev/zram${ZRAM_ID} ${NEW_OVERLAY} \
-    || do_exec mount -t tmpfs -o rw,nosuid,nodev,noatime tmpfs ${NEW_OVERLAY}
+    && { do_exec mount -t ext4 -o noatime,nobarrier,discard /dev/zram${ZRAM_ID} ${NEW_OVERLAY}; FILE_SYSTEM="'zram${ZRAM_DEV}'"; } \
+    || { do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}; FILE_SYSTEM="'tmpfs'"; }
 
-  do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
+  do_exec mkdir -p ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
   [[ -n "${PACKAGES}" ]] && do_pre_proc_packages
+
 } # pre_proc
 
 ######################
@@ -391,17 +392,14 @@ post_proc() {
   }
 
   [[ -f ${RC_LOCAL_FILE} ]] && do_exec sh ${RC_LOCAL_FILE}
-  [[ $(ls -1A /etc/rc.d | grep -c "S??uhttpd") -gt 0 ]] && do_exec /etc/init.d/uhttpd restart
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/root /tmp/ram-root.failsafe # some cleanup
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/ram-root.failsafe # some cleanup
   do_mklink ${OLD_ROOT}${RAM_ROOT} /
 
   echo "PIVOT" > /tmp/ram-root-active
 
   if ${ZRAM_EXIST}; then
+    __which fstrim && do_exec fstrim /overlay
     echo 1 > /sys/block/zram${ZRAM_ID}/compact
-    if which fstrim &>/dev/null; then
-      fstrim /overlay
-    fi
     ${VERBOSE} && zram-status ${ZRAM_ID}
   fi
 
@@ -424,8 +422,8 @@ OLD_ROOT="/old_root"
 RAM_ROOT="/ram-root"
 NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
-
 CONFIG_NAME="ram-root.cfg"
+
 [[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/${CONFIG_NAME}' not exist"; exit 1; }
 source ${RAM_ROOT}/${CONFIG_NAME}
 
@@ -459,9 +457,9 @@ SHARE="${SHARE}/${HOSTNAME}"
 LOCAL_BACKUP_SHARE="${SHARE}"
 [[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 BACKUP_FILE="${BUILD_ID}.tar.gz"
-SSH_CMD="nice -n 19 ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="nice -n 19 ssh -q -y $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="nice -n scp -q -p $(__identity_file) -P ${PORT}"
-which pv >/dev/null && PV_INSTALLED=true || PV_INSTALLED=false
+__which pv && PV_INSTALLED=true || PV_INSTALLED=false
 
 [[ -f ${EXCLUDE_FILE} && $(wc -c ${EXCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} && $(wc -c ${INCLUDE_FILE} | cut -f1 -d' ') -gt 0 ]] && INCL="-T ${INCLUDE_FILE}"
@@ -496,7 +494,7 @@ case ${OPT} in
     do_pivot_root
     post_proc
     ${BACKUP} && do_backup
-    do_logger "Info: ram-root started - first time"
+    do_logger "Info: ram-root started first time using ${FILE_SYSTEM}"
     ;;
 
   start)
@@ -505,7 +503,7 @@ case ${OPT} in
     ${BACKUP} && do_restore
     do_pivot_root
     post_proc
-    do_logger "Info: ram-root started"
+    do_logger "Info: ram-root started using ${FILE_SYSTEM}"
     ;;
 
   stop)
@@ -522,7 +520,7 @@ case ${OPT} in
     pre_proc
     do_pivot_root
     post_proc
-    cmd="Info: ram-root started"
+    cmd="Info: ram-root started using ${FILE_SYSTEM}"
     ${BACKUP} && cmd="${cmd} - bypassed backup"
     do_logger "${cmd}"
     ;;
@@ -532,7 +530,6 @@ case ${OPT} in
     do_chkconnection
     do_backup
     ;;
-
 
   upgrade)
     ${VERBOSE} && {

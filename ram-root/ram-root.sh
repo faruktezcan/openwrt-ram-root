@@ -87,7 +87,9 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
   reboot &
   sleep 30
   __beep
-  reboot -f &
+#  reboot -f &
+  echo 1 > /proc/sys/kernel/sysrq
+  echo b > /proc/sysrq-trigger
   exit 1
 }
 

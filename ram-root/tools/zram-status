@@ -29,4 +29,4 @@ zram_stat() {
     awk '{ printf "%-25s - %d\n\n", "Free pages discarded", $4 }' <$zdev/io_stat
 }
 
-zram_stat $1
+[[ -d /sys/block/zram$1 ]] && zram_stat $1 || echo "zram$1 not found"

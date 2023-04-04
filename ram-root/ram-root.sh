@@ -22,8 +22,7 @@ __occurs() { # check if $1 (separated with $3) contains $2 & return the # of occ
 
 __lowercase() { # converts $1 to lowercase & if $2 defined, set $2 as a variable with result
   local __resultvar="${2}"
-#  local __result=$(echo "${1}" | awk '{print tolower($0)}')
-  local __result=$(echo "${1}" | tr [:upper:] [:lower:])
+  local __result=$(echo "${1}" | awk '{print tolower($0)}')
 
   [[ "$__resultvar" ]] && eval $__resultvar="'$__result'" || echo -n "$__result"
 }
@@ -469,6 +468,10 @@ fi
 
 case ${OPT} in
   init)
+    # If the packages < e2fsprogs kmod-fs-ext4 kmod-zram > are installed before running ram-root,
+    # the ram device will be stored on a zram disk which uses approximately half the memory compared to < tmpfs >.
+    # This means that you can have twice the disk capacity while consuming the same amount of memory.
+
     do_chkconnection || exit 1
     do_update_repositories
     for name in ${INIT_PACKAGES}; do do_install ${name}; done

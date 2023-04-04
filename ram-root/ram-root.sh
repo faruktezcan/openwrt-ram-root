@@ -256,7 +256,7 @@ do_install() { # install a package $1-package nsme
 do_create_chroot_cmd() {
   local packages
 
-  do_logger "Info: checking package(s) -> '${PRE_PACKAGES}'"
+  do_logger "Info: checking < PRE_PACKAGES > : '${PRE_PACKAGES}'"
 
   for name in ${PRE_PACKAGES}; do
     [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; continue; }
@@ -282,12 +282,10 @@ do_pre_proc_packages() { # install non-backable, non-preserved packages after re
   do_create_chroot_cmd
   do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${pre_dir}/upper,workdir=${pre_dir}/work ram-root_pre ${lower_dir}
   for dir in /proc /dev /sys /tmp; do do_exec mount -o rbind ${dir} ${lower_dir}${dir}; done
-#  ${VERBOSE} && start_progress
-  chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
+  do_exec chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
   umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r)
-  mkdir -p ${lower_dir}
-  tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
-#  ${VERBOSE} && kill_progress
+  do_exec mkdir -p ${lower_dir}
+  do_exec eval "tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -"
   LOWER_NAME="${lower_dir}:"
   do_rm ${pre_dir} /tmp/pre_proc_pkgs.sh
 
@@ -298,7 +296,7 @@ do_pre_proc_packages() { # install non-backable, non-preserved packages after re
 ###################################
 pre_proc() {
   do_rm /tmp/ram-root-active
-  touch /tmp/ram-root.failsafe
+  do_exec touch /tmp/ram-root.failsafe
 
   do_logger "Info: creating ram disk"
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}
@@ -307,11 +305,16 @@ pre_proc() {
     ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
     local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
     [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
-    echo $zram_comp_algo > /sys/block/zram${ZRAM_ID}/comp_algorithm
-    __get_mem Free > /sys/block/zram${ZRAM_ID}/disksize
-    mkfs.ext4 -O ^has_journal,fast_commit /dev/zram${ZRAM_ID} &>/dev/null \
-      && ZRAM_EXIST=true \
-      || echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove
+    if [[ $(grep -c "$zram_comp_algo" /sys/block/zram${ZRAM_ID}/comp_algorithm) -gt 0 ]]; then
+      echo ${zram_comp_algo} > /sys/block/zram${ZRAM_ID}/comp_algorithm
+      __get_mem Free > /sys/block/zram${ZRAM_ID}/disksize
+      mkfs.ext4 -O ^has_journal,fast_commit /dev/zram${ZRAM_ID} &>/dev/null \
+        && ZRAM_EXIST=true \
+        || { do_logger "Notice: could not create 'ext4' filesystem on 'zram${ZRAM_ID}'"
+             echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove; }
+    else
+      do_logger "Notice: compression algorithm '${zram_comp_algo}' is not supported for 'zram${ZRAM_ID}'"
+    fi
   fi
 
   ${ZRAM_EXIST} \

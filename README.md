@@ -29,7 +29,7 @@ Introduction:
  changes not the packages you defined. With that, you are saving your flash drive's capacity. The penalty, in this case, is that those packages have
  to be installed next time if you reboot the router.
 
--Installing optional 'zram-swap' is highly adviced as this provides you approx. %50 more memory capacity.
+-Installing optional 'zram-swap' is highly adviced as this provides you approx. 50% more memory capacity.
 
 -For further explanation/investigation please check the self-explanatory config file.
 

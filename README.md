@@ -3,6 +3,7 @@ Extroot using tmpfs with  backup&amp;restore option
 
 
 Introduction:
+
 +++++++++++++
 
 -If you have a router without a USB port, it is very likely that, with more intense usage of your router, you will need more disk space and/or
@@ -33,6 +34,7 @@ Introduction:
 -For further explanation/investigation please check the self-explanatory config file.
 
 Installation:
+
 +++++++++++++
 
 -Download the provided ‘zip’ file and extract 'ram-root' directory to root directory ( '/' ) of your device.
@@ -77,6 +79,7 @@ Run 'opkg upgrade' command to upgrade the system.
 
 
 Notes:
+
 ++++++
 
 If the packages < e2fsprogs kmod-fs-ext4 kmod-zram > are installed before running ram-root, the ram device will be stored
@@ -91,6 +94,7 @@ base system and reboot.
 
 
 Included scripts in 'tools' directory:
+
 ++++++++++++++++++++++++++++++++++++++
 
 'opkgclean.sh'   : Cleans unsuccesful installation attempt debris due to flash storage shortage

@@ -117,14 +117,16 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-message
 
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
-  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
+  local tarz_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
+  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -cf - ."
 
   do_logger "Info: available memory = $( __printf $(__get_mem Available) ) bytes"
   do_logger "Info: calculating backup size"
   local pv_cmd=""; ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd=" pv -tb |" || start_progress; }
-  local backup_size=$( eval "${tar_cmd} |${pv_cmd} wc -c" )
+  local backup_tar_size=$( eval "${tar_cmd} | wc -c" )
+  local backup_zip_size=$( eval "${tarz_cmd} |${pv_cmd} wc -c" )
   ${VERBOSE} && { ${PV_INSTALLED} || kill_progress; }
-  do_logger "Notice: backup size = $( __printf ${backup_size} ) bytes"
+  do_logger "Notice: backup size = $( __printf ${backup_zip_size} ) bytes"
 
   if ${LOCAL_BACKUP}; then
     local share=${LOCAL_BACKUP_SHARE}
@@ -136,15 +138,15 @@ do_backup() { # create ram-root backup
   fi
   do_logger "Notice: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
 
-  [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
+  [[ ${backup_zip_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
 
   local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  pv_cmd=""; ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_size} |"
+  pv_cmd=""; ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_tar_size} |"
 
   ${LOCAL_BACKUP} \
-    && local cmd="${tar_cmd} |${pv_cmd} cat > ${name}" \
-    || local cmd="${tar_cmd} |${pv_cmd} ${SSH_CMD} '${mv_cmd}; cat > ${name}'"
+    && local cmd="${tarz_cmd} |${pv_cmd} cat > ${name}" \
+    || local cmd="${tar_cmd} |${pv_cmd} ${SSH_CMD} '${mv_cmd}; gzip > ${name}'"
 
   if ${BACKGROUND_BACKUP}; then
     do_logger "Info: running in background"
@@ -256,7 +258,7 @@ do_install() { # install a package $1-package nsme
 do_create_chroot_cmd() {
   local packages
 
-  do_logger "Info: checking < PRE_PACKAGES > : '${PRE_PACKAGES}'"
+  do_logger "Info: checking 'PRE_PACKAGES' : '${PRE_PACKAGES}'"
 
   for name in ${PRE_PACKAGES}; do
     [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; continue; }
@@ -273,7 +275,7 @@ EOF
   chmod +x /tmp/pre_proc_pkgs.sh
 }
 
-do_pre_proc_packages() { # install non-backable, non-preserved packages after reboots
+do_pre_packages() { # install non-backable, non-preserved packages after reboots
   local lower_dir="${NEW_OVERLAY}/lower"
   local pre_dir="${NEW_OVERLAY}/pre"
 
@@ -307,7 +309,7 @@ pre_proc() {
     [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
     if [[ $(grep -c "$zram_comp_algo" /sys/block/zram${ZRAM_ID}/comp_algorithm) -gt 0 ]]; then
       echo ${zram_comp_algo} > /sys/block/zram${ZRAM_ID}/comp_algorithm
-      __get_mem Free > /sys/block/zram${ZRAM_ID}/disksize
+      echo $(( $(__get_mem Total) / 2 )) > /sys/block/zram${ZRAM_ID}/disksize
       mkfs.ext4 -O ^has_journal,fast_commit /dev/zram${ZRAM_ID} &>/dev/null \
         && ZRAM_EXIST=true \
         || { do_logger "Notice: could not create 'ext4' filesystem on 'zram${ZRAM_ID}'"
@@ -322,7 +324,7 @@ pre_proc() {
     || { do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}; FILE_SYSTEM="'tmpfs'"; }
 
   do_exec mkdir -p ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
-  [[ -n "${PRE_PACKAGES}" ]] && do_pre_proc_packages
+  [[ -n "${PRE_PACKAGES}" ]] && do_pre_packages
 
 } # pre_proc
 
@@ -429,9 +431,7 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
 
   type ask_bool >/dev/null || source /ram-root/functions/askbool.sh
   ask_bool ${INTERACTIVE} -t 5 -d N "\a\nDo you want to remove it now" && {
-    if umount ${NEW_OVERLAY} >/dev/null; then
-      do_rm /tmp/ram-root.failsafe
-    else
+    [[ -d ${NEW_OVERLAY} ]] && if ! umount ${NEW_OVERLAY} >/dev/null; then
       do_logger "Error: removing 'ram-root' files was unsuccesful. Please reboot"
     fi
   }

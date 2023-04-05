@@ -1,0 +1,25 @@
+#!/bin/sh
+
+zram_compact() {
+    # compact zram device (reduce memory allocation overhead)
+    local zdev="/sys/block/zram$1"
+    local old_mem_used=$(awk '{print $3}' <$zdev/mm_stat)
+    local old_overhead=$(awk '{print $3-$2}' <$zdev/mm_stat)
+
+    echo 1 > $zdev/compact
+
+    echo ""
+    echo "Compacting zram device $zdev"
+    awk -v old_mem="$old_mem_used" -v ovr="$old_overhead" 'BEGIN { fmt = "%-25s - %.1f %s\n" }
+    { printf fmt, "Memory usage reduced by ", (old_mem-$3)/1024/1024, "MiB"
+    printf fmt, "Overhead reduced by", (ovr-($3-$2))/ovr*100, "%" }' <$zdev/mm_stat
+}
+
+# If not running interactively, than just return
+[ -z "$PS1" ] && return 0
+
+zram-status $1
+
+[[ -d /sys/block/zram$1 ]] && zram_compact $1 || echo "zram$1 not found"
+
+zram-status $1

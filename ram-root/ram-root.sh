@@ -117,22 +117,23 @@ do_pidmsg() { # wait until given pid job is completed $1-pid#  2-message
 
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
-  local tarz_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
   local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -cf - ."
 
   do_logger "Info: available memory = $( __printf $(__get_mem Available) ) bytes"
   do_logger "Info: calculating backup size"
   local pv_cmd=""; ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd=" pv -tb |" || start_progress; }
   local backup_tar_size=$( eval "${tar_cmd} | wc -c" )
-  local backup_zip_size=$( eval "${tarz_cmd} |${pv_cmd} wc -c" )
+  local backup_zip_size=$( eval "${tar_cmd} -z |${pv_cmd} wc -c" )
   ${VERBOSE} && { ${PV_INSTALLED} || kill_progress; }
   do_logger "Notice: backup size = $( __printf ${backup_zip_size} ) bytes"
 
   if ${LOCAL_BACKUP}; then
+    local backup_size=${backup_zip_size}
     local share=${LOCAL_BACKUP_SHARE}
     mkdir -p ${share}
     local server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
+    local backup_size=${backup_tar_size}
     local share=${SHARE}
     server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df -kP ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
   fi
@@ -142,10 +143,10 @@ do_backup() { # create ram-root backup
 
   local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  pv_cmd=""; ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_tar_size} |"
+  pv_cmd=""; ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_size} |"
 
   ${LOCAL_BACKUP} \
-    && local cmd="${tarz_cmd} |${pv_cmd} cat > ${name}" \
+    && local cmd="${tar_cmd} -z |${pv_cmd} cat > ${name}" \
     || local cmd="${tar_cmd} |${pv_cmd} ${SSH_CMD} '${mv_cmd}; gzip > ${name}'"
 
   if ${BACKGROUND_BACKUP}; then
@@ -168,11 +169,12 @@ do_restore() { # restore ram-root backup
 
   if ${backupExist}; then
     do_logger "Info: restoring file '${name}' from '${SERVER}'"
-    ${LOCAL_BACKUP} \
-      && local cmd="${tar_cmd} ${name}" \
-      || local cmd="${SSH_CMD} 'gzip -dc ${name}' | ${tar_cmd} -"
     ${VERBOSE} && start_progress
-    eval "${cmd}"
+
+    ${LOCAL_BACKUP} \
+      && eval "${tar_cmd} ${name}" -z \
+      || eval "${SSH_CMD} 'gzip -dc ${name}' | ${tar_cmd} -"
+
     ${VERBOSE} && kill_progress
   else
     do_logger "Notice: backup file '${name}' not found"

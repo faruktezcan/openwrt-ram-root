@@ -11,14 +11,14 @@ do_backup() {
     touch $FILENAME 1>/dev/null 2>&1 || { echo "Invalid file name: '${FILENAME}'"; rm -f ${FILENAME} 1>/dev/null 2>&1; exit 1; }
   }
   echo -e "\nChecking. Please wait!\n"
-  opkg_update -i
+  opkg_update -i;  opkg list | cut -d' ' -f1 > /tmp/available.packages
  
   start_progress
 
   local ft=$(mktemp); local ft1=$(mktemp); local COUNT1=0; local COUNT2=0; local ov_control
 
   for NAME in $(find /overlay/upper/usr/lib/opkg/info -name "*.control" 2>/dev/null | sed 's/.*\///;s/.control//' | sort -r); do
-    [[ ! -f $ROM/usr/lib/opkg/info/$NAME.control && "$(opkg status $NAME)" != "" ]] && ov_control="$NAME $ov_control"
+    [[ ! -f $ROM/usr/lib/opkg/info/$NAME.control && $( grep -cw ^${NAME}$ /tmp/available.packages ) -gt 0 ]] && ov_control="$NAME $ov_control"
   done
 
   for NAME in $ov_control; do
@@ -59,6 +59,8 @@ do_backup() {
     echo -e "\nNo user installed package(s) and/or service(s) found"
     exit 1
   fi
+
+  rm /tmp/available.packages
 
   [ "$cmd" == "" ] && exit 0
 
@@ -104,11 +106,11 @@ do_restore() {
       case $CONT in
         + )
           MSG="already enabled"
-          [ ! -e /etc/rc.d/S??$NAME ] && { $xx start; $xx enable; [ $? -eq 0 ] && MSG="enabled" || MSG="Error! Code:$?"; }
+          [[ ! -e /etc/rc.d/S??$NAME ]] && { $xx start; $xx enable; [ $? -eq 0 ] && MSG="enabled" || MSG="Error! Code:$?"; }
           ;;
         - )
           MSG="already disabled"
-          [ -e /etc/rc.d/S??$NAME ] && { $xx stop; $xx disable; [ $? -eq 0 ] && MSG="disabled" || MSG="Error! Code:$?"; }
+          [[ -e /etc/rc.d/S??$NAME ]] && { $xx stop; $xx disable; [ $? -eq 0 ] && MSG="disabled" || MSG="Error! Code:$?"; }
           ;;
         * )
           MSG="$CONT undefined"

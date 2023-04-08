@@ -107,12 +107,7 @@ do_rm() { # remove dir or file(s)
 }
 
 do_mklink() { # make symlink $1-file/dir $2-destination
-  [[ -L ${2} ]] || do_exec ln -sf ${1} ${2}
-}
-
-do_pidmsg() { # wait until given pid job is completed $1-pid#  2-message
-  while [[ $(ps | awk '{print $1}' | grep -c ${1}) -gt 0 ]]; do sleep 1; done
-  do_logger "${2}"
+  [[ -h ${2} ]] || do_exec ln -sf ${1} ${2}
 }
 
 do_backup() { # create ram-root backup
@@ -121,7 +116,8 @@ do_backup() { # create ram-root backup
 
   do_logger "Info: available memory = $( __printf $(__get_mem Available) ) bytes"
   do_logger "Info: calculating backup size"
-  local pv_cmd=""; ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd=" pv -tb |" || start_progress; }
+  local pv_cmd=""
+  ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd=" pv -tb |" || start_progress; }
   local backup_tar_size=$( eval "${tar_cmd} | wc -c" )
   local backup_zip_size=$( eval "${tar_cmd} -z |${pv_cmd} wc -c" )
   ${VERBOSE} && { ${PV_INSTALLED} || kill_progress; }
@@ -131,11 +127,11 @@ do_backup() { # create ram-root backup
     local backup_size=${backup_zip_size}
     local share=${LOCAL_BACKUP_SHARE}
     mkdir -p ${share}
-    local server_free_space=$( df -kP ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
+    local server_free_space=$( df ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
     local backup_size=${backup_tar_size}
     local share=${SHARE}
-    server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df -kP ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
+    local server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
   fi
   do_logger "Notice: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
 
@@ -143,7 +139,8 @@ do_backup() { # create ram-root backup
 
   local name="${share}/${BACKUP_FILE}"
   local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  pv_cmd=""; ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_size} |"
+  pv_cmd=""
+  ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_size} |"
 
   ${LOCAL_BACKUP} \
     && local cmd="${tar_cmd} -z |${pv_cmd} cat > ${name}" \
@@ -200,6 +197,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
   local msg="Error: no connection to server '${SERVER}' port '${PORT}'"
   [[ "${err}" == "Y" ]] && do_error "${msg}"
   do_logger "${msg}"
+  __beep
   return 1
 } # do_chkconnection
 
@@ -217,9 +215,7 @@ do_init() { # server setup
       mkdir -p ${SHARE}
     else
       local key_types="rsa"
-      case ${VERSION} in
-        2*) key_types="rsa ed25519" ;;
-      esac
+      case ${VERSION} in 2*) key_types="rsa ed25519" ;; esac
 
       for key_type in ${key_types}
       do
@@ -243,66 +239,68 @@ do_init() { # server setup
 
 do_update_repositories() {
   type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
-  opkg_update ${INTERACTIVE}; [[ $? -gt 0 ]] && do_error "Error: updating repository failed"
+  opkg_update ${INTERACTIVE} || do_error "Error: updating repository failed"
+  opkg list | cut -d' ' -f1 > /tmp/available.packages
 }
 
-do_install() { # install a package $1-package nsme
-  local name=${1}
+do_chk_packages() {
+  local pkgs
+  for name in ${@}; do
+    [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; continue; }
+    [[ $( grep -cw ^${name}$ /tmp/available.packages ) -eq 0 ]] && { do_logger "Notice: '${name}' not found"; continue; }
+    pkgs="${pkgs} ${name}"
+  done
+  echo "${pkgs}"
+}
 
-  [[ -z "${name}" ]] && return 1
-
-  [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; return 1; }
-  [[ -z "$(opkg find ${name})" ]] && { do_error "Error: '${name}' not found"; return 1; }
-  do_exec opkg install ${name}
+do_install() { # install package(s)
+  local packages="$( do_chk_packages ${@} )"
+  [[ -z "${packages}" ]] && return 1
+  do_exec opkg install ${packages}
   return 0
 }
 
 do_create_chroot_cmd() {
-  local packages
-
-  do_logger "Info: checking 'PRE_PACKAGES' : '${PRE_PACKAGES}'"
-
-  for name in ${PRE_PACKAGES}; do
-    [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; continue; }
-    [[ -z "$(opkg find ${name})" ]] && { do_logger "Notice: '${name}' not found"; continue; }
-    packages="${packages} ${name}"
-  done
+  local packages="$( do_chk_packages ${PRE_PACKAGES} )"
+  [[ -z "${packages}" ]] && return 1
 
   cat << EOF > /tmp/pre_proc_pkgs.sh
 #!/bin/sh
 opkg install ${packages}
-exit 0
+exit $?
 EOF
-
   chmod +x /tmp/pre_proc_pkgs.sh
+  return 0
 }
 
 do_pre_packages() { # install non-backable, non-preserved packages after reboots
-  local lower_dir="${NEW_OVERLAY}/lower"
-  local pre_dir="${NEW_OVERLAY}/pre"
-
-  do_exec mkdir -p ${lower_dir} ${pre_dir}/upper ${pre_dir}/work
   do_update_repositories
-  do_create_chroot_cmd
-  do_exec mount -t overlay -o noatime,lowerdir=/,upperdir=${pre_dir}/upper,workdir=${pre_dir}/work ram-root_pre ${lower_dir}
-  for dir in /proc /dev /sys /tmp; do do_exec mount -o rbind ${dir} ${lower_dir}${dir}; done
-  do_exec chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
-  umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r)
-  do_exec mkdir -p ${lower_dir}
-  do_exec eval "tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -"
-  LOWER_NAME="${lower_dir}:"
-  do_rm ${pre_dir} /tmp/pre_proc_pkgs.sh
-
+  do_logger "Info: installing 'PRE_PACKAGES'"
+  if do_create_chroot_cmd; then
+    local lower_dir="${NEW_OVERLAY}/lower"
+    local pre_dir="${NEW_OVERLAY}/pre"
+    mkdir -p ${lower_dir} ${pre_dir}/upper ${pre_dir}/work
+    mount -t overlay -o noatime,lowerdir=/,upperdir=${pre_dir}/upper,workdir=${pre_dir}/work ram-root_pre ${lower_dir} \
+      || do_error "Error: < pre packages mount overlay > code $?"
+    for dir in /proc /dev /sys /tmp; do mount -o rbind ${dir} ${lower_dir}${dir} \
+      || do_error "Error: < pre packages mount sys dirs > code $?"; done
+    chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
+#      || do_error "Error: < pre packages chroot > code $?"
+    umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r ) \
+      || do_error "Error: < pre packages umount sys dirs > code $?"
+    tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
+    rm -Rf ${pre_dir} /tmp/pre_proc_pkgs.sh
+    LOWER_NAME="${lower_dir}:"
+  fi
 }
 
 ###################################
 #       PRE INSTALL PROCEDURE     #
 ###################################
-pre_proc() {
-  do_rm /tmp/ram-root-active
-  do_exec touch /tmp/ram-root.failsafe
-
+do_pre_pivot_root() {
   do_logger "Info: creating ram disk"
+
+  do_exec touch /tmp/ram-root.failsafe
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}
 
   if [[ -f /sys/class/zram-control/hot_add ]] && __which mkfs.ext4; then
@@ -326,14 +324,15 @@ pre_proc() {
     || { do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}; FILE_SYSTEM="'tmpfs'"; }
 
   do_exec mkdir -p ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
+
   [[ -n "${PRE_PACKAGES}" ]] && do_pre_packages
 
-} # pre_proc
+} # do_pre_pivot_root
 
-######################
-#     PIVOT_ROOT     #
-######################
-do_pivot_root() {
+###################################
+#     POST INSTALL PROCEDURE      #
+###################################
+do_post_pivot_root() {
   do_exec mount -t overlay -o noatime,lowerdir=${LOWER_NAME}/,upperdir=${NEW_OVERLAY}/upper,workdir=${NEW_OVERLAY}/work ram-root ${NEW_ROOT}
   do_exec mkdir -p ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
@@ -341,14 +340,10 @@ do_pivot_root() {
   do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
   for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
   do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
-} # do_pivot_root
 
-###################################
-#     POST INSTALL PROCEDURE      #
-###################################
-post_proc() {
+  do_chkconnection
+
   local message_diplayed=false
-
   ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
     [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
       ${message_diplayed} || { do_logger "Info: starting service(s) enabled in 'ram-root'"; message_diplayed=true; }
@@ -386,10 +381,6 @@ post_proc() {
   }
 
   [[ -f ${RC_LOCAL_FILE} ]] && do_exec sh ${RC_LOCAL_FILE}
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/ram-root.failsafe
-  do_mklink ${OLD_ROOT}${RAM_ROOT} /
-
-  echo "PIVOT_ROOT" > /tmp/ram-root-active
 
   if ${ZRAM_EXIST}; then
     __which fstrim && do_exec fstrim /overlay
@@ -397,7 +388,11 @@ post_proc() {
     ${VERBOSE} && zram-status ${ZRAM_ID}
   fi
 
-} # post_proc
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/available.packages /tmp/ram-root.failsafe
+  do_mklink ${OLD_ROOT}${RAM_ROOT} /
+
+  echo "PIVOT_ROOT" > /tmp/ram-root-active
+} # do_post_pivot_root
 
 ##################
 #      MAIN      #
@@ -477,31 +472,31 @@ case ${OPT} in
     # the ram device will be stored on a zram disk which uses approximately half the memory compared to < tmpfs >.
     # This means that you can have twice the disk capacity while consuming the same amount of memory.
 
-    do_chkconnection || exit 1
-    do_update_repositories
-    for name in ${INIT_PACKAGES}; do do_install ${name}; done
-    do_init
-    pre_proc
-    do_pivot_root
-    post_proc
+    do_chkconnection 60 N || exit 1
+    if [[ -n "${INIT_PACKAGES}" ]]; then
+      do_update_repositories
+      do_logger "Info: installing 'INIT_PACKAGES'"
+      do_install ${INIT_PACKAGES}
+      do_init
+    fi
+    do_pre_pivot_root
+    do_post_pivot_root
     ${BACKUP} && do_backup
     do_logger "Info: ram-root started first time using '${FILE_SYSTEM}'"
     ;;
 
   start)
-    do_chkconnection || exit 1
-    pre_proc
+    do_chkconnection 60 N || exit 1
+    do_pre_pivot_root
     ${BACKUP} && do_restore
-    do_pivot_root
-    post_proc
+    do_post_pivot_root
     do_logger "Info: ram-root started using '${FILE_SYSTEM}'"
     ;;
 
   reset)
-    do_chkconnection || exit 1
-    pre_proc
-    do_pivot_root
-    post_proc
+    do_chkconnection 60 N || exit 1
+    do_pre_pivot_root
+    do_post_pivot_root
     cmd="Info: ram-root started using '${FILE_SYSTEM}'"
     ${BACKUP} && cmd="${cmd} - bypassed backup"
     do_logger "${cmd}"
@@ -511,35 +506,37 @@ case ${OPT} in
     ${VERBOSE} && {
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-      ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m" && do_backup
+      ${BACKUP} && if ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m"; then
+        do_chkconnection 60 N && do_backup
+      fi
     }
     do_error " " 5
     ;;
 
   backup)
-    ${BACKUP} || { do_error "Info: backup not defined in config file"; exit 1; }
-    do_chkconnection || exit 1
-    do_backup
+    ${BACKUP} || { do_error "Info: backup not defined in config file"; __beep; exit 1; }
+    do_chkconnection 60 N && do_backup
     ;;
 
   upgrade)
     ${VERBOSE} && {
-      do_chkconnection || exit 1
-      type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
+      do_chkconnection 60 N || exit 1
+      type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
       ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
+      exit 0
     }
     do_error "Error: cannot upgrade in background"
+   __beep
     exit 1
     ;;
 
   *)
     do_logger "Error: invalid option: '${OPT}'"
+    __beep
     exit 1
     ;;
 esac
-
-__beep
 
 exit 0

@@ -12,6 +12,16 @@
 #  return 0
 #}
 
+__valid_ip() {
+  local ip=${1}
+  if [[ $( echo ${ip} | grep -c . ) -gt 0 ]] ; then
+    [[ "$ip" == "$(echo ${ip} | grep -E '(([0-9]{1,3})\.){3}([0-9]{1,3}){1}' | \
+      grep -vE '25[6-9]|2[6-9][0-9]|[3-9][0-9][0-9]')" ]] && return 0
+    return 1
+  fi
+  return 0
+}
+
 __list_contains() { # return 0 if $1 contains $2; otherwise return 1
   [[ "${1%% ${2} *}" == "${1}" ]] && return 1 || return 0
 }
@@ -188,13 +198,14 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
 
   do_logger "Info: verifying connection to '${SERVER}' port '${PORT}'"
   while [[ ${secs} -gt 0 ]]; do
-    ${SSH_CMD} 'exit 0' 2>/dev/null & return 0
+    ${SSH_CMD} 'exit 0' 2>/dev/null && { printf "\r"; return 0; }
     ${VERBOSE} && printf "\a\r%2d" ${secs}
     secs=$((secs-1))
     sleep 1
   done
 
-  local msg="Error: no connection to server '${SERVER}' port '${PORT}'"
+  printf "\a\r"
+  local msg="Error: connection failed"
   [[ "${err}" == "Y" ]] && do_error "${msg}"
   do_logger "${msg}"
   __beep
@@ -466,13 +477,15 @@ else
   [[ $(__occurs "stop backup upgrade" $OPT) -gt 0 ]] && { do_logger "Info: 'ram-root' not running"; exit 1; }
 fi
 
+__valid_ip ${SERVER} || { do_logger "Error: '${SERVER}' not a valid ip"; exit 1; }
+
 case ${OPT} in
   init)
     # If the packages < e2fsprogs kmod-fs-ext4 kmod-zram > are installed before running ram-root,
     # the ram device will be stored on a zram disk which uses approximately half the memory compared to < tmpfs >.
     # This means that you can have twice the disk capacity while consuming the same amount of memory.
 
-    do_chkconnection 60 N || exit 1
+    do_chkconnection 30 N || exit 1
     if [[ -n "${INIT_PACKAGES}" ]]; then
       do_update_repositories
       do_logger "Info: installing 'INIT_PACKAGES'"
@@ -486,7 +499,7 @@ case ${OPT} in
     ;;
 
   start)
-    do_chkconnection 60 N || exit 1
+    do_chkconnection 30 N || exit 1
     do_pre_pivot_root
     ${BACKUP} && do_restore
     do_post_pivot_root
@@ -494,7 +507,7 @@ case ${OPT} in
     ;;
 
   reset)
-    do_chkconnection 60 N || exit 1
+    do_chkconnection 30 N || exit 1
     do_pre_pivot_root
     do_post_pivot_root
     cmd="Info: ram-root started using '${FILE_SYSTEM}'"
@@ -507,7 +520,7 @@ case ${OPT} in
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
       ${BACKUP} && if ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup before rebooting\e[0m"; then
-        do_chkconnection 60 N && do_backup
+        do_chkconnection 30 N && do_backup
       fi
     }
     do_error " " 5
@@ -515,13 +528,13 @@ case ${OPT} in
 
   backup)
     ${BACKUP} || { do_error "Info: backup not defined in config file"; __beep; exit 1; }
-    do_chkconnection 60 N && do_backup
+    do_chkconnection 5 N && do_backup
     ;;
 
   upgrade)
     ${VERBOSE} && {
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
-      do_chkconnection 60 N || exit 1
+      do_chkconnection 5 N || exit 1
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
       ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup

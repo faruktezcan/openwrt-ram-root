@@ -330,9 +330,15 @@ do_pre_pivot_root() {
     fi
   fi
 
-  ${ZRAM_EXIST} \
-    && { do_exec mount -t ext4 -o noatime,nobarrier,discard /dev/zram${ZRAM_ID} ${NEW_OVERLAY}; FILE_SYSTEM="'zram${ZRAM_DEV}'"; } \
-    || { do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}; FILE_SYSTEM="'tmpfs'"; }
+  if ${ZRAM_EXIST}; then
+    do_logger "Info: mounting 'ext4' ram drive"
+    do_exec mount -t ext4 -o noatime,nobarrier,discard /dev/zram${ZRAM_ID} ${NEW_OVERLAY}
+    FILE_SYSTEM="zram${ZRAM_DEV}"
+  else
+    do_logger "Info: mounting 'tmpfs' ram drive"
+    do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}
+    FILE_SYSTEM="tmpfs"
+  fi
 
   do_exec mkdir -p ${NEW_OVERLAY}/upper ${NEW_OVERLAY}/work
 
@@ -399,8 +405,8 @@ do_post_pivot_root() {
     ${VERBOSE} && zram-status ${ZRAM_ID}
   fi
 
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} ${RAM_ROOT} /rom /tmp/available.packages /tmp/ram-root.failsafe
-  do_mklink ${OLD_ROOT}${RAM_ROOT} /
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} /ram-root /rom /tmp/available.packages /tmp/ram-root.failsafe
+  do_mklink ${OLD_ROOT}/ram-root /
 
   echo "PIVOT_ROOT" > /tmp/ram-root-active
 } # do_post_pivot_root
@@ -419,13 +425,11 @@ do_post_pivot_root() {
 [[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
 OPT=$(__lowercase ${1})
 OLD_ROOT="/old_root"
-RAM_ROOT="/ram-root"
-NEW_ROOT="/tmp/root"
 NEW_OVERLAY="/tmp/overlay"
 CONFIG_NAME="ram-root.cfg"
 
-[[ -f ${RAM_ROOT}/${CONFIG_NAME} ]] || { do_logger "Error: config file '${RAM_ROOT}/${CONFIG_NAME}' not exist"; exit 1; }
-source ${RAM_ROOT}/${CONFIG_NAME}
+[[ -f /ram-root/${CONFIG_NAME} ]] || { do_logger "Error: config file '/ram-root/${CONFIG_NAME}' not exist"; exit 1; }
+source /ram-root/${CONFIG_NAME}
 
 ${DEBUG} && set -xv
 
@@ -536,7 +540,7 @@ case ${OPT} in
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
       do_chkconnection 5 N || exit 1
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
-      ${RAM_ROOT}/tools/opkgupgrade.sh ${INTERACTIVE}
+      /ram-root/tools/opkgupgrade.sh ${INTERACTIVE}
       ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
       exit 0
     }

@@ -424,6 +424,7 @@ do_post_pivot_root() {
 
 [[ $# -ne 1 ]] && { do_logger "Error: need an option to run"; exit 1; }
 OPT=$(__lowercase ${1})
+NEW_ROOT="/tmp/root"
 OLD_ROOT="/old_root"
 NEW_OVERLAY="/tmp/overlay"
 CONFIG_NAME="ram-root.cfg"

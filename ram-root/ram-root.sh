@@ -225,23 +225,17 @@ do_init() { # server setup
     if ${LOCAL_BACKUP}; then
       mkdir -p ${SHARE}
     else
-      local key_types="rsa"
-      case ${VERSION} in 2*) key_types="rsa ed25519" ;; esac
-
-      for key_type in ${key_types}
-      do
-        local key_file="/etc/dropbear/dropbear_${key_type}_host_key"
-        [[ -f ${key_file} ]] || {
-          do_exec dropbearkey -t ${key_type} -f ${key_file}
-          do_mklink ${key_file} /root/.ssh/id_${key_type}
-        }
+      for key_file in $(ls /etc/dropbear/dropbear_*_host_key); do
+        key_type=$(echo $key_file | cut -d _ -f 2)
+        do_mklink ${key_file} /root/.ssh/id_${key_type}
         local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
         local name=$(echo ${key} | awk '{print $3}')
-        local cmd="mkdir -p ${SHARE}; \
-                   touch /etc/dropbear/authorized_keys; \
-                   sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
-                   sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
-                   echo ${key} >> /etc/dropbear/authorized_keys"
+        local cmd="\
+          mkdir -p ${SHARE}; \
+          touch /etc/dropbear/authorized_keys; \
+          sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
+          sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
+          echo ${key} >> /etc/dropbear/authorized_keys"
         ${SSH_CMD} "${cmd}" || do_error "Error: server '${SERVER}' setup not completed. Return code: '$?'"
       done
     fi

@@ -71,6 +71,17 @@ __which() {
   which "${1}" &>/dev/null && return 0 || return 1
 }
 
+__reboot_now() {
+  __beep
+  reboot &
+
+  [ "$1" -ge 1 ] && {
+    sleep "$1"
+    echo 1 > /proc/sys/kernel/sysrq
+    echo b > /proc/sysrq-trigger # Will immediately reboot the system without syncing or unmounting your disks.
+  }
+}
+
 do_exec() { # <command> execute command(s)
   local cmd="${@}"
 
@@ -93,12 +104,7 @@ do_error() { # <error message> <seconds> $1-mesage text $2-seconds(default=30)
 
   ${VERBOSE} && { echo "ram-root: Notice: rebooting in $secs seconds\nPress 'Ctrl+C' to cancel"; do_countdown ${secs}; }
 
-  reboot &
-  sleep 30
-  __beep
-#  reboot -f &
-  echo 1 > /proc/sys/kernel/sysrq
-  echo b > /proc/sysrq-trigger
+  __reboot_now 30
   exit 1
 }
 
@@ -198,7 +204,7 @@ do_chkconnection() { # check internet connection $1-seconds(default=60) $2-do_er
 
   do_logger "Info: verifying connection to '${SERVER}' port '${PORT}'"
   while [[ ${secs} -gt 0 ]]; do
-    ${SSH_CMD} 'exit 0' 2>/dev/null && { printf "\r"; return 0; }
+    ${SSH_CMD} 'exit 0' && { printf "\r"; return 0; }
     ${VERBOSE} && printf "\a\r%2d" ${secs}
     secs=$((secs-1))
     sleep 1
@@ -288,7 +294,7 @@ do_pre_packages() { # install non-backable, non-preserved packages after reboots
     mount -t overlay -o noatime,lowerdir=/,upperdir=${pre_dir}/upper,workdir=${pre_dir}/work ram-root_pre ${lower_dir} \
       || do_error "Error: < pre packages mount overlay > code $?"
     for dir in /proc /dev /sys /tmp; do mount -o rbind ${dir} ${lower_dir}${dir} \
-      || do_error "Error: < pre packages mount sys dirs > code $?"; done
+      || do_error "Error: < pre packages mount ${dir} > code $?"; done
     chroot ${lower_dir} "/tmp/pre_proc_pkgs.sh"
 #      || do_error "Error: < pre packages chroot > code $?"
     umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r ) \
@@ -330,7 +336,7 @@ do_pre_pivot_root() {
     FILE_SYSTEM="zram${ZRAM_DEV}"
   else
     do_logger "Info: mounting 'tmpfs' ram drive"
-    do_exec mount -t tmpfs -o noatime tmpfs ${NEW_OVERLAY}
+    do_exec mount -t tmpfs -o noatime,mode=0755 tmpfs ${NEW_OVERLAY}
     FILE_SYSTEM="tmpfs"
   fi
 
@@ -349,7 +355,9 @@ do_post_pivot_root() {
   do_exec mount -o bind / ${NEW_ROOT}${OLD_ROOT}
   do_exec mount -o noatime,nodiratime,move /proc ${NEW_ROOT}/proc
   do_exec pivot_root ${NEW_ROOT} ${NEW_ROOT}${OLD_ROOT}
-  for dir in /dev /sys /tmp; do do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}${dir} ${dir}; done
+  do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}/dev /dev
+  do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}/tmp /tmp
+  do_exec mount -o noatime,nodiratime,move ${OLD_ROOT}/sys /sys
   do_exec mount -o noatime,nodiratime,move ${NEW_OVERLAY} /overlay
 
   do_chkconnection
@@ -357,15 +365,15 @@ do_post_pivot_root() {
   local message_diplayed=false
   ls -1A /etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
     [[ -f ${OLD_ROOT}/etc/rc.d/${name} ]] || {
-      ${message_diplayed} || { do_logger "Info: starting service(s) enabled in 'ram-root'"; message_diplayed=true; }
+      ${message_displayed} || { do_logger "Info: starting service(s) enabled in 'ram-root'"; message_displayed=true; }
       do_exec /etc/init.d/${name:3} start
     }
   done
 
-  message_diplayed=false
+  message_displayed=false
   ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
     [[ -f /etc/rc.d/${name} ]] || {
-      ${message_diplayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_diplayed=true; }
+      ${message_displayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_displayed0;152;36M=true; }
       do_exec /etc/init.d/${name:3} stop
     }
   done
@@ -402,6 +410,17 @@ do_post_pivot_root() {
   do_rm ${NEW_ROOT} ${NEW_OVERLAY} /ram-root /rom /tmp/available.packages /tmp/ram-root.failsafe
   do_mklink ${OLD_ROOT}/ram-root /
 
+  local index=0
+  local uci_response
+  while : ; do
+    uci_response=$(uci -q get fstab.@mount[${index}].enabled); [ $? -eq 1 ] && break
+    if [ "${uci_response}" == "1" ]; then
+      uci_response=$(uci get fstab.@mount[${index}].target)
+      [[ $? -eq 0 && -d ${uci_response} ]] && { do_rm ${uci_response}; do_mklink ${OLD_ROOT}${uci_response} /;  }
+    fi
+    index=$((index+1))
+  done
+
   echo "PIVOT_ROOT" > /tmp/ram-root-active
 } # do_post_pivot_root
 
@@ -434,14 +453,15 @@ if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
   do_logger "Info: previous attempt was not successful"
   do_logger "fix the problem & run 'rm /tmp/ram-root.failsafe' command to continue"
-  [[ -z "${PS1}" ]] && exit 1
+  [[ -t 1 ]] || exit 1
 
   type ask_bool >/dev/null || source /ram-root/functions/askbool.sh
   ask_bool ${INTERACTIVE} -t 5 -d N "\a\nDo you want to remove it now" && {
     [[ -d ${NEW_OVERLAY} ]] && if ! umount ${NEW_OVERLAY} >/dev/null; then
-      do_logger "Error: removing 'ram-root' files was unsuccesful. Please reboot"
+      do_logger "Error: unmounting ${NEW_OVERLAY} was unsuccesful. Please reboot!"
     fi
   }
+  rm /tmp/ram-root.failsafe
   exit 1
 fi
 
@@ -457,13 +477,14 @@ SHARE="${SHARE}/${HOSTNAME}"
 LOCAL_BACKUP_SHARE="${SHARE}"
 [[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 BACKUP_FILE="${BUILD_ID}.tar.gz"
-SSH_CMD="nice -n 19 ssh -q -y $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="nice -n 19 ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
 #SCP_CMD="nice -n scp -q -p $(__identity_file) -P ${PORT}"
 __which pv && PV_INSTALLED=true || PV_INSTALLED=false
 [[ -f ${EXCLUDE_FILE} ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} ]] && INCL="-T ${INCLUDE_FILE}"
-[[ -z "${PS1}" ]] && VERBOSE=false
-[[ "${OPT}" == "init" && -n "${PS1}" ]] && VERBOSE=true
+#[[ -z "${PS1}" ]] && VERBOSE=false
+[[ -t 1 ]] || VERBOSE=false
+[[ "${OPT}" == "init" && -t 1 ]] && VERBOSE=true
 
 if ${VERBOSE}; then
   type print_progress >/dev/null || source /ram-root/functions/printprogress.sh
@@ -540,7 +561,7 @@ case ${OPT} in
       exit 0
     }
     do_error "Error: cannot upgrade in background"
-   __beep
+    __beep
     exit 1
     ;;
 

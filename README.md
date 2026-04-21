@@ -108,3 +108,5 @@ Included scripts in 'tools' directory:
 'ssh-copy-id'    : Copies your ssh credentials to the remote device for easier ssh connections.
 
 'zram-status'    : Shows the zram drive statistics.
+
+Note: Upgraded to new 'apk' repository management system

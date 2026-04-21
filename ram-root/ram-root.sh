@@ -6,12 +6,6 @@
 #set -u
 #set -xv # debug
 
-#__list_contains() { # return 0 if $1 contains $2; otherwise return 1
-#  local T="${1/${2}/}"
-#  [[ ${#T} -eq ${#1} ]] && return 1
-#  return 0
-#}
-
 __valid_ip() {
   local ip=${1}
   if [[ $( echo ${ip} | grep -c . ) -gt 0 ]] ; then
@@ -19,12 +13,17 @@ __valid_ip() {
       grep -vE '25[6-9]|2[6-9][0-9]|[3-9][0-9][0-9]')" ]] && return 0
     return 1
   fi
-  return 0
 }
 
-__list_contains() { # return 0 if $1 contains $2; otherwise return 1
-  [[ "${1%% ${2} *}" == "${1}" ]] && return 1 || return 0
-}
+#__list_contains() { # return 0 if $1 contains $2; otherwise return 1
+#  local T="${1/${2}/}"
+#  [[ ${#T} -eq ${#1} ]] && return 1
+#  return 0
+#}
+
+#__list_contains() { # return 0 if $1 contains $2; otherwise return 1
+#  [[ "${1%% ${2} *}" == "${1}" ]] && return 1
+#}
 
 __occurs() { # check if $1 (separated with $3) contains $2 & return the # of occurances
   echo "${1}" | tr {{"${3:-" "}"}} {{'\n'}} | grep -F -c -x "${2}"
@@ -55,7 +54,6 @@ __printf() { # formatted numeric output
   else # Mixed
     echo ${1} | sed ':a; s/\b\([0-9]\+\)\([0-9]\{3\}\)\b/\1,\2/; ta'
   fi
-  return 0
 }
 
 __beep() {
@@ -236,12 +234,11 @@ do_init() { # server setup
         do_mklink ${key_file} /root/.ssh/id_${key_type}
         local key=$(dropbearkey -y -f ${key_file} | grep "ssh-")
         local name=$(echo ${key} | awk '{print $3}')
-        local cmd="\
-          mkdir -p ${SHARE}; \
-          touch /etc/dropbear/authorized_keys; \
-          sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
-          sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
-          echo ${key} >> /etc/dropbear/authorized_keys"
+        local cmd="mkdir -p ${SHARE}; \
+                   touch /etc/dropbear/authorized_keys; \
+                   sed -i '/${key_type}/ s/${name}/!@@@!/' /etc/dropbear/authorized_keys; \
+                   sed -i '/^$/d; /!@@@!/d' /etc/dropbear/authorized_keys; \
+                   echo ${key} >> /etc/dropbear/authorized_keys"
         ${SSH_CMD} "${cmd}" || do_error "Error: server '${SERVER}' setup not completed. Return code: '$?'"
       done
     fi
@@ -251,24 +248,26 @@ do_init() { # server setup
 do_update_repositories() {
   type opkg_update >/dev/null || source /ram-root/functions/opkgupdate.sh
   opkg_update ${INTERACTIVE} || do_error "Error: updating repository failed"
-  opkg list | cut -d' ' -f1 > /tmp/available.packages
 }
 
 do_chk_packages() {
+  local list_installed="$(apk info)"
+  local list_available="$(apk list | sed 's/-[0-9].*//')"
   local pkgs
+
   for name in ${@}; do
-    [[ -f /usr/lib/opkg/info/${name}.control ]] && { do_logger "Notice: '${name}' already installed"; continue; }
-    [[ $( grep -cw ^${name}$ /tmp/available.packages ) -eq 0 ]] && { do_logger "Notice: '${name}' not found"; continue; }
+    [[ $(__occurs "${list_installed}" ${name}) -gt 0 ]] && { do_logger "Notice: '${name}' already installed"; continue; }
+    [[ $(__occurs "${list_available}" ${name}) -eq 0 ]] && { do_logger "Notice: '${name}' not found"; continue; }
     pkgs="${pkgs} ${name}"
   done
   echo "${pkgs}"
 }
 
 do_install() { # install package(s)
+  do_update_repositories
   local packages="$( do_chk_packages ${@} )"
   [[ -z "${packages}" ]] && return 1
-  do_exec opkg install ${packages}
-  return 0
+  do_exec apk add ${packages}
 }
 
 do_create_chroot_cmd() {
@@ -277,11 +276,10 @@ do_create_chroot_cmd() {
 
   cat << EOF > /tmp/pre_proc_pkgs.sh
 #!/bin/sh
-opkg install ${packages}
+apk add ${packages}
 exit $?
 EOF
   chmod +x /tmp/pre_proc_pkgs.sh
-  return 0
 }
 
 do_pre_packages() { # install non-backable, non-preserved packages after reboots
@@ -314,14 +312,14 @@ do_pre_pivot_root() {
   do_exec touch /tmp/ram-root.failsafe
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}
 
-  if [[ -f /sys/class/zram-control/hot_add ]] && __which mkfs.ext4; then
+  if [[ -d /sys/module/zram ]] && __which mkfs.ext4; then
     ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
     local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
     [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
     if [[ $(grep -c "$zram_comp_algo" /sys/block/zram${ZRAM_ID}/comp_algorithm) -gt 0 ]]; then
       echo ${zram_comp_algo} > /sys/block/zram${ZRAM_ID}/comp_algorithm
       echo $(( $(__get_mem Total) / 2 )) > /sys/block/zram${ZRAM_ID}/disksize
-      mkfs.ext4 -O ^has_journal,fast_commit /dev/zram${ZRAM_ID} &>/dev/null \
+      mkfs.ext4 -O ^has_journal /dev/zram${ZRAM_ID} &>/dev/null \
         && ZRAM_EXIST=true \
         || { do_logger "Notice: could not create 'ext4' filesystem on 'zram${ZRAM_ID}'"
              echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove; }
@@ -373,7 +371,7 @@ do_post_pivot_root() {
   message_displayed=false
   ls -1A ${OLD_ROOT}/etc/rc.d | grep ^S | grep -v ram-root | while read -r name; do
     [[ -f /etc/rc.d/${name} ]] || {
-      ${message_displayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_displayed0;152;36M=true; }
+      ${message_displayed} || { do_logger "Info: stopping service(s) disabled in 'ram-root'"; message_displayed=true; }
       do_exec /etc/init.d/${name:3} stop
     }
   done
@@ -393,7 +391,7 @@ do_post_pivot_root() {
   }
 
   [[ -n "${STOP_SERVICES}" ]] && {
-    do_logger "Info: stopping service(s) defined in ${CONFIG_NAME}'"
+    do_logger "Info: stopping service(s) defined in ${CONFIG_NAME}"
     for name in ${STOP_SERVICES}; do
       [[ -f /etc/init.d/${name} ]] && do_exec /etc/init.d/${name} stop || do_logger "Notice: ${name} not found"
     done
@@ -407,7 +405,7 @@ do_post_pivot_root() {
     ${VERBOSE} && zram-status ${ZRAM_ID}
   fi
 
-  do_rm ${NEW_ROOT} ${NEW_OVERLAY} /ram-root /rom /tmp/available.packages /tmp/ram-root.failsafe
+  do_rm ${NEW_ROOT} ${NEW_OVERLAY} /ram-root /rom /tmp/ram-root.failsafe
   do_mklink ${OLD_ROOT}/ram-root /
 
   local index=0
@@ -506,11 +504,10 @@ case ${OPT} in
     # This means that you can have twice the disk capacity while consuming the same amount of memory.
 
     do_chkconnection 30 N || exit 1
+    do_init
     if [[ -n "${INIT_PACKAGES}" ]]; then
-      do_update_repositories
       do_logger "Info: installing 'INIT_PACKAGES'"
       do_install ${INIT_PACKAGES}
-      do_init
     fi
     do_pre_pivot_root
     do_post_pivot_root
@@ -531,7 +528,7 @@ case ${OPT} in
     do_pre_pivot_root
     do_post_pivot_root
     cmd="Info: ram-root started using '${FILE_SYSTEM}'"
-    ${BACKUP} && cmd="${cmd} - bypassed backup"
+    ${BACKUP} && cmd="${cmd} - backup bypassed"
     do_logger "${cmd}"
     ;;
 
@@ -571,5 +568,3 @@ case ${OPT} in
     exit 1
     ;;
 esac
-
-exit 0

@@ -312,20 +312,17 @@ do_pre_pivot_root() {
   do_exec touch /tmp/ram-root.failsafe
   do_exec mkdir -p ${NEW_ROOT} ${NEW_OVERLAY}
 
-  if [[ -d /sys/module/zram ]] && __which mkfs.ext4; then
-    ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
-    local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
-    [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
-    if [[ $(grep -c "$zram_comp_algo" /sys/block/zram${ZRAM_ID}/comp_algorithm) -gt 0 ]]; then
-      echo ${zram_comp_algo} > /sys/block/zram${ZRAM_ID}/comp_algorithm
+  if [ -d /sys/module/zram ]; then
+    __which mkfs.ext4; [[ $? -eq 0 ]] && {
+      ZRAM_ID=$(cat /sys/class/zram-control/hot_add)
+      local zram_comp_algo="$( uci -q get system.@system[0].zram_comp_algo )"
+      [[ -z "$zram_comp_algo" ]] && zram_comp_algo="lzo"
+      [[ $(grep -c "$zram_comp_algo" /sys/block/zram${ZRAM_ID}/comp_algorithm) -gt 0 ]] && echo ${zram_comp_algo} > /sys/block/zram${ZRAM_ID}/comp_algorithm
       echo $(( $(__get_mem Total) / 2 )) > /sys/block/zram${ZRAM_ID}/disksize
-      mkfs.ext4 -O ^has_journal /dev/zram${ZRAM_ID} &>/dev/null \
+      mkfs.ext4 -O ^has_journal /dev/zram${ZRAM_ID} &>/dev/null; [[ $? -eq 0 ]] \
         && ZRAM_EXIST=true \
-        || { do_logger "Notice: could not create 'ext4' filesystem on 'zram${ZRAM_ID}'"
-             echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove; }
-    else
-      do_logger "Notice: compression algorithm '${zram_comp_algo}' is not supported for 'zram${ZRAM_ID}'"
-    fi
+        || { do_logger "Notice: could not create 'ext4' filesystem on 'zram${ZRAM_ID}'"; echo ${ZRAM_ID} > /sys/class/zram-control/hot_remove; }
+    }
   fi
 
   if ${ZRAM_EXIST}; then

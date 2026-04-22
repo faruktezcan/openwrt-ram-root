@@ -38,7 +38,7 @@ _COL_RST="\e[0m"
 
 NAME_WIDTH=30
 COLUMN_WIDTH=80
-which stty > /dev/null && COLUMN_WIDTH=$(stty size &>/dev/null | awk '{print $2}') # pkg name = 'coreutils-stty'
+which stty &>/dev/null && COLUMN_WIDTH=$(stty size | awk '{print $2}') # pkg name = 'coreutils-stty'
 COLUMN_COUNT=$(( COLUMN_WIDTH / (NAME_WIDTH + 3) ))
 [[ $COLUMN_COUNT -eq 0 ]] && COLUMN_COUNT=1
 

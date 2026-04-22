@@ -15,8 +15,11 @@ opkg_update () {
   local interactive=${1}
 
   [[ $# -ge 1 && "$interactive" != "-i" ]] && interactive="-i"
-  local count=$(echo $(ls /tmp/cache/apk/) | wc -w )
-  [[ -d /tmp/cache/apk && $count -gt 0 ]] && time=$(( $(date +%s) - $(date -r /tmp/cache/apk +%s) ))
+
+  if [ -d /tmp/cache/apk ]; then
+    local count=$(ls /tmp/cache/apk/ | wc -w)
+    [[ $count -gt 0 ]] && time=$(( $(date +%s) - $(date -r /tmp/cache/apk +%s) ))
+  fi
 
   [[ $time -ge 600 ]] && time=0
 

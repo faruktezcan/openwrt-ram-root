@@ -126,67 +126,68 @@ do_mklink() { # make symlink $1-file/dir $2-destination
 
 do_backup() { # create ram-root backup
   local dir="/overlay/upper/"
-  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -cf - ."
+  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
 
   do_logger "Info: available memory = $( __printf $(__get_mem Available) ) bytes"
-  do_logger "Info: calculating backup size"
-  local pv_cmd=""
-  ${VERBOSE} && { ${PV_INSTALLED} && pv_cmd=" pv -tb |" || start_progress; }
-  local backup_tar_size=$( eval "${tar_cmd} | wc -c" )
-  local backup_zip_size=$( eval "${tar_cmd} -z |${pv_cmd} wc -c" )
-  ${VERBOSE} && { ${PV_INSTALLED} || kill_progress; }
-  do_logger "Notice: backup size = $( __printf ${backup_zip_size} ) bytes"
+  do_logger "Info: calculating backup file size"
+
+  local backup_size=$( eval "${tar_cmd} | wc -c" )
+
+  do_logger "Notice: backup file size = $( __printf ${backup_size} ) bytes"
 
   if ${LOCAL_BACKUP}; then
-    local backup_size=${backup_zip_size}
     local share=${LOCAL_BACKUP_SHARE}
     mkdir -p ${share}
     local server_free_space=$( df ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
-    local backup_size=${backup_tar_size}
     local share=${SHARE}
     local server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
   fi
-  do_logger "Notice: ${SERVER} free space = $( __printf ${server_free_space} ) bytes"
 
-  [[ ${backup_zip_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
+  do_logger "Notice: ${SERVER} free disk space = $( __printf ${server_free_space} ) bytes"
+  [[ ${backup_size} -gt ${server_free_space} ]] && do_error "Error: backup size too big"
 
   local name="${share}/${BACKUP_FILE}"
-  local mv_cmd="[[ -f ${name} ]] && mv -f ${name} ${name}~"
-  pv_cmd=""
-  ${VERBOSE} && ${PV_INSTALLED} && ! ${BACKGROUND_BACKUP} && pv_cmd=" pv -eps ${backup_size} |"
-
-  ${LOCAL_BACKUP} \
-    && local cmd="${tar_cmd} -z |${pv_cmd} cat > ${name}" \
-    || local cmd="${tar_cmd} |${pv_cmd} ${SSH_CMD} '${mv_cmd}; gzip > ${name}'"
+  local mv_cmd="mv -f ${name} ${name}~ &>/dev/null"
+  if ${LOCAL_BACKUP}; then
+    local cmd="${mv_cmd}; ${tar_cmd} | cat > ${name}"
+  else
+    local cmd="${tar_cmd} | ${SSH_CMD} '${mv_cmd}; cat > ${name}'"
+  fi
 
   if ${BACKGROUND_BACKUP}; then
     do_logger "Info: running in background"
     eval "${cmd}; do_logger 'Info: backup created in ${SERVER}:${name}'" &
   else
     do_logger "Info: sending backup file"
-    eval "${cmd}; do_logger 'Info: backup created in ${SERVER}:${name}'"
-  fi
+    ${VERBOSE} && start_progress
+    eval "${cmd}"
+    ${VERBOSE} && kill_progress
+    printf $'\r'; do_logger "Info: backup created in ${SERVER}:${name}"
+ fi
 } # do_backup
 
 do_restore() { # restore ram-root backup
   local name="${SHARE}/${BACKUP_FILE}"
-  local tar_cmd="nice -n 19 tar -C ${NEW_OVERLAY}/upper/ -xf"
+  local tar_cmd="tar -C ${NEW_OVERLAY}/upper/ -xzf"
   local backupExist=false
 
-  ${LOCAL_BACKUP} \
-  && { [[ -f ${name} ]] && backupExist=true; } \
-  || { ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true; }
+  if ${LOCAL_BACKUP}; then
+    [[ -f ${name} ]] && backupExist=true
+  else
+    ${SSH_CMD} "[[ -f ${name} ]] && return 0 || return 1" && backupExist=true
+  fi
 
   if ${backupExist}; then
-    do_logger "Info: restoring file '${name}' from '${SERVER}'"
+    do_logger "Info: restoring backup file '${name}' from '${SERVER}'"
     ${VERBOSE} && start_progress
-
-    ${LOCAL_BACKUP} \
-      && eval "${tar_cmd} ${name}" -z \
-      || eval "${SSH_CMD} 'gzip -dc ${name}' | ${tar_cmd} -"
-
+    if ${LOCAL_BACKUP}; then
+      eval "${tar_cmd} ${name}"
+    else
+      eval "${SSH_CMD} 'cat ${name}' < /dev/null | ${tar_cmd} -"
+    fi
     ${VERBOSE} && kill_progress
+    printf $'\r'; do_logger "Info: backup file restored succesfully"
   else
     do_logger "Notice: backup file '${name}' not found"
   fi
@@ -472,9 +473,8 @@ SHARE="${SHARE}/${HOSTNAME}"
 LOCAL_BACKUP_SHARE="${SHARE}"
 [[ ${LOCAL_BACKUP} && $(__occurs ${SHARE} ${OLD_ROOT}) -eq 0 ]] && LOCAL_BACKUP_SHARE="${OLD_ROOT}${SHARE}" # make sure backup goes to < OLD-ROOT >
 BACKUP_FILE="${BUILD_ID}.tar.gz"
-SSH_CMD="nice -n 19 ssh -q $(__identity_file) ${USER}@${SERVER}/${PORT}"
+SSH_CMD="nice -n 19 ssh -p ${PORT} -q $(__identity_file) ${USER}@${SERVER}"
 #SCP_CMD="nice -n scp -q -p $(__identity_file) -P ${PORT}"
-__which pv && PV_INSTALLED=true || PV_INSTALLED=false
 [[ -f ${EXCLUDE_FILE} ]] && EXCL="-X ${EXCLUDE_FILE}"
 [[ -f ${INCLUDE_FILE} ]] && INCL="-T ${INCLUDE_FILE}"
 #[[ -z "${PS1}" ]] && VERBOSE=false

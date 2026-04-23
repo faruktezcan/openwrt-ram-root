@@ -137,3 +137,6 @@ Define your required packages in `PRE_PACKAGES`. ram-root will install them fres
 - The previous (flash-based) root is always accessible at `/old_root` while ram-root is running.
 - If a previous ram-root run did not complete successfully, a `/tmp/ram-root.failsafe` file is created. Remove it after fixing the problem to allow ram-root to run again.
 - `zram` support requires `e2fsprogs`, `kmod-fs-ext4`, and `kmod-zram` to be installed **before** running `init`.
+- Upgraded to new 'apk' repository management system.
+
+

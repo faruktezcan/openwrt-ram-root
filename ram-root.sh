@@ -125,23 +125,24 @@ do_mklink() { # make symlink $1-file/dir $2-destination
 }
 
 do_backup() { # create ram-root backup
-  local backup_size
+  local backup_size=0
+  local server_free_space=0
   local dir="/overlay/upper/"
-  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf - ."
+  local tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czO ."
 
   do_logger "Info: available memory = $( __printf $(__get_mem Available) ) bytes"
 
   do_logger "Info: calculating backup file size"
-  backup_size=$( set -o pipefail; eval "${tar_cmd} | wc -c" ) \
+  backup_size=$( ${tar_cmd} | wc -c ) \
     && do_logger "Notice: backup file size = $( __printf ${backup_size} ) bytes" \
     || do_error "Error: failed to calculate backup size"
 
   if ${LOCAL_BACKUP}; then
     local share=${LOCAL_BACKUP_SHARE}
-    local server_free_space=$( mkdir -p ${share}; df ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
+    server_free_space=$( mkdir -p ${share}; df ${share} | awk '$1 != "Filesystem" {print $4*1024}' )
   else
     local share=${SHARE}
-    local server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
+    server_free_space=$( ${SSH_CMD} "mkdir -p ${share}; df ${share}" | awk '$1 != "Filesystem" {print $4*1024}' )
   fi
 
   do_logger "Notice: ${SERVER} free disk space = $( __printf ${server_free_space} ) bytes"
@@ -152,8 +153,7 @@ do_backup() { # create ram-root backup
   local cmd
 
   if ${LOCAL_BACKUP}; then
-    tar_cmd="nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf ${name} ."
-    cmd="${mv_cmd}; ${tar_cmd}"
+    cmd="${mv_cmd}; nice -n 19 tar -C ${dir} ${EXCL} ${INCL} -czf ${name} ."
   else
     cmd="(set -o pipefail; ${tar_cmd} | ${SSH_CMD} '${mv_cmd}; cat > ${name}')"
   fi
@@ -184,13 +184,34 @@ do_restore() { # restore ram-root backup
   fi
 
   if ${backupExist}; then
+    local backup_size=0
+    local client_free_space=0
+
+    if ${LOCAL_BACKUP}; then
+     # tail -c 4 — reads only the last 4 bytes (gzip ISIZE footer)
+     # hexdump -e '1/4 "%u\n"' — interprets them as an unsigned 32-bit little-endian integer
+      backup_size=$( tail -c 4 ${name} | hexdump -e '1/4 "%u\n"' )
+    else
+      backup_size=$( ${SSH_CMD} "tail -c 4 ${name}" | hexdump -e '1/4 "%u\n"' )
+    fi
+
+    [[ -z "${backup_size}" ]] && do_error "Error: could not determine backup file size"
+
+    client_free_space=$( df ${NEW_OVERLAY}/upper/ | awk '$1 != "Filesystem" {print $4*1024}' )
+
+    do_logger "Notice: backup uncompressed size  = $( __printf ${backup_size} ) bytes"
+    do_logger "Notice: available free disk space = $( __printf ${client_free_space} ) bytes"
+
+    [[ ${backup_size} -gt ${client_free_space} ]] \
+      && do_error "Error: not enough disk space to restore backup"
+
     do_logger "Info: restoring backup file '${name}' from '${SERVER}'"
     ${VERBOSE} && start_progress
 
     if ${LOCAL_BACKUP}; then
       eval "${tar_cmd} ${name}"; result=$?
     else
-      ( set -o pipefail; eval "${SSH_CMD} 'cat ${name}' < /dev/null | ${tar_cmd} -" ); result=$?
+      eval "(set -o pipefail; ${SSH_CMD} 'cat ${name} < /dev/null' | ${tar_cmd} - )"; result=$?
     fi
 
     ${VERBOSE} && kill_progress; printf $'\r'
@@ -309,7 +330,8 @@ do_pre_packages() { # install non-backable, non-preserved packages after reboots
 #      || do_error "Error: < pre packages chroot > code $?"
     umount $( mount | grep ${lower_dir} | cut -f3 -d' ' | sort -r ) \
       || do_error "Error: < pre packages umount sys dirs > code $?"
-    tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
+#    tar -C ${pre_dir}/upper/ -cf - . | tar -C ${lower_dir} -xf -
+    mv ${pre_dir}/upper/* ${lower_dir}
     rm -Rf ${pre_dir} /tmp/pre_proc_pkgs.sh
     LOWER_NAME="${lower_dir}:"
   fi

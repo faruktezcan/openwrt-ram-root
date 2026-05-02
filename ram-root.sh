@@ -476,7 +476,7 @@ source /ram-root/${CONFIG_NAME}
 
 ${DEBUG} && set -xv
 
-${INTERACTIVE_UPGRADE} && INTERACTIVE="-i"
+${INTERACTIVE_UPGRADE} && INTERACTIVE="-i" || INTERACTIVE="-a"
 
 if [[ -f /tmp/ram-root.failsafe ]]; then
   do_rm /etc/rc.d/???ram-root
@@ -581,11 +581,12 @@ case ${OPT} in
 
   upgrade)
     ${VERBOSE} && {
+      type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       ask_bool -i -t 10 -d n "\a\e[31mAre you sure\e[0m" || exit 1
       do_chkconnection 5 N || exit 1
       type ask_bool &>/dev/null || source /ram-root/functions/askbool.sh
       /ram-root/tools/opkgupgrade.sh ${INTERACTIVE}
-      ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31mDo you want to backup now\e[0m" && do_backup
+      ${BACKUP} && ask_bool -i -t 10 -d n "\a\e[31m\nDo you want to backup now\e[0m" && do_backup
       exit 0
     }
     do_error "Error: cannot upgrade in background"

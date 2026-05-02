@@ -44,7 +44,7 @@ If `e2fsprogs`, `kmod-fs-ext4`, and `kmod-zram` are installed before running ram
 ```sh
 /ram-root/ram-root.sh init
 ```
-Runs the first-time installation: sets up the RAM drive, configures the server (if using remote backup), installs any defined packages, and registers ram-root in `/etc/init.d/` for future use. Must be run from a **local console** (not SSH), as it pivots the root filesystem.
+Runs the first-time installation: sets up the RAM drive, configures the server (if using remote backup), installs any defined packages, and registers ram-root in `/etc/init.d/` for future use.
 
 ---
 
